@@ -2976,5 +2976,5 @@ def write_summary_file(stats, filepath, year=2025, home_locations=None):
 </body>
 </html>'''
 
-    with open(filepath, 'w') as f:
+    with open(filepath, 'w', encoding='utf-8') as f:
         f.write(html)

@@ -980,7 +980,7 @@ def load_merchant_rules(csv_path):
         return []  # No user rules file, just use baseline
 
     rules = []
-    with open(csv_path, 'r') as f:
+    with open(csv_path, 'r', encoding='utf-8') as f:
         # Filter out comment lines before passing to DictReader
         lines = [line for line in f if not line.strip().startswith('#')]
         reader = csv.DictReader(lines)

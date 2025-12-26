@@ -761,7 +761,7 @@ def init_config(target_dir):
     # Write settings.yaml
     settings_path = os.path.join(config_dir, 'settings.yaml')
     if not os.path.exists(settings_path):
-        with open(settings_path, 'w') as f:
+        with open(settings_path, 'w', encoding='utf-8') as f:
             f.write(STARTER_SETTINGS.format(year=current_year))
         files_created.append('config/settings.yaml')
     else:
@@ -770,7 +770,7 @@ def init_config(target_dir):
     # Write merchant_categories.csv
     merchants_path = os.path.join(config_dir, 'merchant_categories.csv')
     if not os.path.exists(merchants_path):
-        with open(merchants_path, 'w') as f:
+        with open(merchants_path, 'w', encoding='utf-8') as f:
             f.write(STARTER_MERCHANT_CATEGORIES)
         files_created.append('config/merchant_categories.csv')
     else:
@@ -779,7 +779,7 @@ def init_config(target_dir):
     # Create .gitignore for data privacy
     gitignore_path = os.path.join(target_dir, '.gitignore')
     if not os.path.exists(gitignore_path):
-        with open(gitignore_path, 'w') as f:
+        with open(gitignore_path, 'w', encoding='utf-8') as f:
             f.write('''# Budget Analyzer - Ignore sensitive data
 data/
 output/
@@ -789,7 +789,7 @@ output/
     # Create README
     readme_path = os.path.join(target_dir, 'README.md')
     if not os.path.exists(readme_path):
-        with open(readme_path, 'w') as f:
+        with open(readme_path, 'w', encoding='utf-8') as f:
             f.write(f'''# My Budget Analysis
 
 Budget analysis for {current_year}.
@@ -810,7 +810,7 @@ Run `budget-analyze --help-config` for detailed configuration guide.
     # Create AGENTS.md for AI agent instructions
     agents_path = os.path.join(target_dir, 'AGENTS.md')
     if not os.path.exists(agents_path):
-        with open(agents_path, 'w') as f:
+        with open(agents_path, 'w', encoding='utf-8') as f:
             f.write(STARTER_AGENTS_MD)
         files_created.append('AGENTS.md')
     else:
@@ -819,7 +819,7 @@ Run `budget-analyze --help-config` for detailed configuration guide.
     # Create CLAUDE.md for Claude Code specific instructions
     claude_path = os.path.join(target_dir, 'CLAUDE.md')
     if not os.path.exists(claude_path):
-        with open(claude_path, 'w') as f:
+        with open(claude_path, 'w', encoding='utf-8') as f:
             f.write(STARTER_CLAUDE_MD)
         files_created.append('CLAUDE.md')
     else:

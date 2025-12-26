@@ -23,7 +23,7 @@ def load_yaml_simple(filepath):
     current_list = []
     current_item = {}
 
-    with open(filepath, 'r') as f:
+    with open(filepath, 'r', encoding='utf-8') as f:
         for line in f:
             # Skip comments and empty lines
             stripped = line.strip()
@@ -94,7 +94,7 @@ def load_settings(config_dir, settings_file='settings.yaml'):
         raise FileNotFoundError(f"Settings file not found: {settings_path}")
 
     if HAS_YAML:
-        with open(settings_path, 'r') as f:
+        with open(settings_path, 'r', encoding='utf-8') as f:
             return yaml.safe_load(f)
     else:
         return load_yaml_simple(settings_path)
