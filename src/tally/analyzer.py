@@ -26,6 +26,42 @@ except ImportError:
 # DATA PARSING
 # ============================================================================
 
+def parse_amount(amount_str, decimal_separator='.'):
+    """Parse an amount string to float, handling various formats.
+
+    Args:
+        amount_str: String like "1,234.56" or "1.234,56" or "(100.00)"
+        decimal_separator: Character used as decimal separator ('.' or ',')
+
+    Returns:
+        Float value of the amount
+    """
+    amount_str = amount_str.strip()
+
+    # Handle parentheses notation for negative: (100.00) -> -100.00
+    negative = False
+    if amount_str.startswith('(') and amount_str.endswith(')'):
+        negative = True
+        amount_str = amount_str[1:-1]
+
+    # Remove currency symbols
+    amount_str = re.sub(r'[$€£¥]', '', amount_str).strip()
+
+    if decimal_separator == ',':
+        # European format: 1.234,56 or 1 234,56
+        # Remove thousand separators (period or space)
+        amount_str = amount_str.replace('.', '').replace(' ', '')
+        # Convert decimal comma to period for float()
+        amount_str = amount_str.replace(',', '.')
+    else:
+        # US format: 1,234.56
+        # Remove thousand separators (comma)
+        amount_str = amount_str.replace(',', '')
+
+    result = float(amount_str)
+    return -result if negative else result
+
+
 def extract_location(description):
     """Extract state/country code from transaction description."""
     # Pattern: ends with 2-letter code (state or country)
@@ -166,7 +202,7 @@ def parse_boa(filepath, rules, home_locations=None):
     return transactions
 
 
-def parse_generic_csv(filepath, format_spec, rules, home_locations=None, source_name='CSV'):
+def parse_generic_csv(filepath, format_spec, rules, home_locations=None, source_name='CSV', decimal_separator='.'):
     """
     Parse a CSV file using a custom format specification.
 
@@ -176,6 +212,7 @@ def parse_generic_csv(filepath, format_spec, rules, home_locations=None, source_
         rules: Merchant categorization rules
         home_locations: Set of location codes considered "home"
         source_name: Name to use for transaction source (default: 'CSV')
+        decimal_separator: Character used as decimal separator ('.' or ',')
 
     Returns:
         List of transaction dictionaries
@@ -214,12 +251,8 @@ def parse_generic_csv(filepath, format_spec, rules, home_locations=None, source_
                 date_str = date_str.split()[0]  # Take just the date part
                 date = datetime.strptime(date_str, format_spec.date_format)
 
-                # Parse amount (handle commas, currency symbols, parentheses for negatives)
-                amount_str = amount_str.replace(',', '').replace('$', '').strip()
-                # Handle parentheses notation for negative: (100.00) -> -100.00
-                if amount_str.startswith('(') and amount_str.endswith(')'):
-                    amount_str = '-' + amount_str[1:-1]
-                amount = float(amount_str)
+                # Parse amount (handle locale-specific formats)
+                amount = parse_amount(amount_str, decimal_separator)
 
                 # Apply negation if specified (for credit cards where positive = charge)
                 if format_spec.negate_amount:
@@ -229,11 +262,8 @@ def parse_generic_csv(filepath, format_spec, rules, home_locations=None, source_
                 if amount == 0:
                     continue
 
-                # Track if this is a credit (negative after sign normalization)
+                # Track if this is a credit (negative amount = income/refund)
                 is_credit = amount < 0
-
-                # Normalize to positive for expense tracking
-                amount = abs(amount)
 
                 # Extract location
                 location = None

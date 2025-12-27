@@ -54,6 +54,10 @@ data_sources:
   - name: BofA Checking
     file: data/bofa.csv
     format: "{date:%m/%d/%Y},{description},{-amount}"
+  - name: German Bank
+    file: data/german.csv
+    format: "{date:%d.%m.%Y},{description},{amount}"
+    decimal_separator: ","  # European format (1.234,56)
 ```
 
 ### Format Strings

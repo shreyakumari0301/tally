@@ -1077,7 +1077,8 @@ def cmd_run(args):
             elif parser_type == 'generic' and format_spec:
                 txns = parse_generic_csv(filepath, format_spec, rules,
                                          home_locations,
-                                         source_name=source.get('name', 'CSV'))
+                                         source_name=source.get('name', 'CSV'),
+                                         decimal_separator=source.get('decimal_separator', '.'))
             else:
                 if not args.quiet:
                     print(f"  {source['name']}: Unknown parser type '{parser_type}'")
@@ -1216,7 +1217,8 @@ def cmd_discover(args):
             elif parser_type == 'generic' and format_spec:
                 txns = parse_generic_csv(filepath, format_spec, rules,
                                          home_locations,
-                                         source_name=source.get('name', 'CSV'))
+                                         source_name=source.get('name', 'CSV'),
+                                         decimal_separator=source.get('decimal_separator', '.'))
             else:
                 continue
         except Exception:
