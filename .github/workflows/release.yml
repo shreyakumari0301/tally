@@ -9,14 +9,11 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            artifact_name: tally
-            asset_name: tally-linux-amd64
+            platform: linux-amd64
           - os: macos-latest
-            artifact_name: tally
-            asset_name: tally-macos-amd64
+            platform: macos-amd64
           - os: windows-latest
-            artifact_name: tally.exe
-            asset_name: tally-windows-amd64.exe
+            platform: windows-amd64
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -44,16 +41,23 @@ jobs:
       - name: Build executable
         run: uv run pyinstaller --onefile src/tally/__main__.py --name tally
 
-      - name: Rename artifact
+      - name: Create zip (Unix)
+        if: runner.os != 'Windows'
         run: |
-          mv dist/${{ matrix.artifact_name }} dist/${{ matrix.asset_name }}
-        shell: bash
+          cd dist
+          zip tally-${{ matrix.platform }}.zip tally
+
+      - name: Create zip (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          cd dist
+          Compress-Archive -Path tally.exe -DestinationPath tally-${{ matrix.platform }}.zip
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.asset_name }}
-          path: dist/${{ matrix.asset_name }}
+          name: tally-${{ matrix.platform }}
+          path: dist/tally-${{ matrix.platform }}.zip
 
   release:
     needs: build
@@ -89,26 +93,31 @@ jobs:
           draft: false
           prerelease: false
           files: |
-            artifacts/tally-linux-amd64/tally-linux-amd64
-            artifacts/tally-macos-amd64/tally-macos-amd64
-            artifacts/tally-windows-amd64.exe/tally-windows-amd64.exe
+            artifacts/tally-linux-amd64/tally-linux-amd64.zip
+            artifacts/tally-macos-amd64/tally-macos-amd64.zip
+            artifacts/tally-windows-amd64/tally-windows-amd64.zip
           body: |
             ## Tally v${{ steps.version.outputs.version }}
 
             Standalone executables for budget transaction analysis.
 
             ### Downloads
-            - **Linux**: `tally-linux-amd64`
-            - **macOS**: `tally-macos-amd64`
-            - **Windows**: `tally-windows-amd64.exe`
+            | Platform | File |
+            |----------|------|
+            | Linux | `tally-linux-amd64.zip` |
+            | macOS | `tally-macos-amd64.zip` |
+            | Windows | `tally-windows-amd64.zip` |
 
             ### Usage
             ```bash
+            # Extract
+            unzip tally-linux-amd64.zip
+
             # Make executable (Linux/macOS)
-            chmod +x tally-*
+            chmod +x tally
 
             # Run
-            ./tally-linux-amd64 version
-            ./tally-linux-amd64 init ./my-budget
-            ./tally-linux-amd64 run
+            ./tally version
+            ./tally init ./my-budget
+            ./tally run
             ```
