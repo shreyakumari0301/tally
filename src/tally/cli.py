@@ -12,7 +12,7 @@ import argparse
 import os
 import sys
 
-from ._version import VERSION, GIT_SHA
+from ._version import VERSION, GIT_SHA, REPO_URL
 from .config_loader import load_config
 
 BANNER = r'''
@@ -1794,6 +1794,7 @@ Examples:
     elif args.command == 'version':
         sha_display = GIT_SHA[:8] if GIT_SHA != 'unknown' else 'unknown'
         print(f"tally {VERSION} ({sha_display})")
+        print(REPO_URL)
 
 
 if __name__ == '__main__':

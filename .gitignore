@@ -39,8 +39,5 @@ Thumbs.db
 output/
 *.html
 
-# Generated at build time
-src/tally/_version.py
-
 # PyInstaller
 *.spec

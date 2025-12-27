@@ -35,6 +35,7 @@ jobs:
           COMMIT_COUNT=$(git rev-list --count HEAD)
           echo "VERSION = \"0.1.${COMMIT_COUNT}\"" > src/tally/_version.py
           echo "GIT_SHA = \"${{ github.sha }}\"" >> src/tally/_version.py
+          echo "REPO_URL = \"https://github.com/${{ github.repository }}/tree/${{ github.sha }}\"" >> src/tally/_version.py
           cat src/tally/_version.py
         shell: bash
 
