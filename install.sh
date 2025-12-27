@@ -5,7 +5,7 @@ set -e
 # Usage: curl -fsSL https://raw.githubusercontent.com/davidfowl/tally/main/install.sh | bash
 
 REPO="davidfowl/tally"
-INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
+INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 TMPDIR="${TMPDIR:-/tmp}"
 
 # Colors
@@ -76,14 +76,9 @@ main() {
     unzip -q "${DOWNLOAD_PATH}/${FILENAME}" -d "${DOWNLOAD_PATH}"
 
     # Install
-    if [ -w "$INSTALL_DIR" ]; then
-        mv "${DOWNLOAD_PATH}/tally" "${INSTALL_DIR}/tally"
-        chmod +x "${INSTALL_DIR}/tally"
-    else
-        info "Installing to ${INSTALL_DIR} (requires sudo)..."
-        sudo mv "${DOWNLOAD_PATH}/tally" "${INSTALL_DIR}/tally"
-        sudo chmod +x "${INSTALL_DIR}/tally"
-    fi
+    mkdir -p "$INSTALL_DIR"
+    mv "${DOWNLOAD_PATH}/tally" "${INSTALL_DIR}/tally"
+    chmod +x "${INSTALL_DIR}/tally"
 
     # Cleanup
     rm -rf "$DOWNLOAD_PATH"

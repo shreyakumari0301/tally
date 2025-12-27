@@ -7,10 +7,10 @@
 ## Install
 
 ```bash
-# Linux/macOS
+# Linux/macOS (installs to ~/.local/bin)
 curl -fsSL https://raw.githubusercontent.com/davidfowl/tally/main/install.sh | bash
 
-# Windows (PowerShell)
+# Windows PowerShell (installs to %LOCALAPPDATA%\tally)
 irm https://raw.githubusercontent.com/davidfowl/tally/main/install.ps1 | iex
 
 # With uv
