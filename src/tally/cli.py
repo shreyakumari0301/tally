@@ -434,6 +434,11 @@ home_locations:
 travel_labels:
   HI: Hawaii
   GB: United Kingdom
+
+# Optional: currency display format (default: ${amount})
+currency_format: "€{amount}"      # Euro prefix: €1,234
+# currency_format: "{amount} zł"  # Polish złoty suffix: 1,234 zł
+# currency_format: "£{amount}"    # British pound prefix: £1,234
 ```
 
 If `home_locations` is not specified, it's auto-detected from your most common transaction location.
