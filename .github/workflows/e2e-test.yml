@@ -1,0 +1,60 @@
+name: E2E Smoke Test
+
+on:
+  workflow_run:
+    workflows: ["Dev Build"]
+    types:
+      - completed
+
+jobs:
+  smoke-test:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset: tally-linux-x86_64.zip
+          - os: macos-latest
+            asset: tally-darwin-arm64.zip
+          - os: windows-latest
+            asset: tally-windows-x86_64.zip
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download dev release
+        run: gh release download dev --pattern "${{ matrix.asset }}" --dir .
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install tally (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          unzip ${{ matrix.asset }}
+          chmod +x tally
+          sudo mv tally /usr/local/bin/
+          tally version
+
+      - name: Install tally (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Expand-Archive -Path ${{ matrix.asset }} -DestinationPath .
+          Move-Item -Path tally.exe -Destination $env:USERPROFILE
+          $env:PATH = "$env:USERPROFILE;$env:PATH"
+          [Environment]::SetEnvironmentVariable("PATH", $env:PATH, "Process")
+          tally version
+
+      - name: Run smoke test (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          chmod +x tests/e2e/smoke_test.sh
+          tests/e2e/smoke_test.sh
+
+      - name: Run smoke test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:PATH = "$env:USERPROFILE;$env:PATH"
+          & tests/e2e/smoke_test.ps1
