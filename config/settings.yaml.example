@@ -37,6 +37,20 @@ data_sources:
   #   columns:
   #     description: "{vendor} ({txn_type})"  # Combines columns into description
 
+# Supplemental data sources (optional)
+# Provide item-level data (e.g., Amazon order history) to improve categorization
+# for vendors where transaction descriptions aren't detailed enough
+# supplemental_sources:
+#   - name: Amazon Orders
+#     file: data/amazon-orders.csv
+#     vendor: AMAZON  # Merchant name pattern to match (regex)
+#     vendor_pattern: AMAZON.*  # Optional: more specific pattern
+#     match_fields: [date, amount]  # Fields to match on (default: [date, amount])
+#     # Optional: custom format (default assumes Amazon order history format)
+#     # format: "{date:%m/%d/%Y},{order_id},{title},{category},{amount}"
+#     # columns:
+#     #   description: "{title}"
+
 # Location settings
 home_state: WA  # Used for badge coloring (green for home state)
 

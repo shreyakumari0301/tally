@@ -12,7 +12,7 @@ from collections import defaultdict
 from datetime import datetime
 
 from .merchant_utils import normalize_merchant
-from .format_parser import FormatSpec
+from .format_parser import FormatSpec, parse_format_string
 
 # Try to import sentence_transformers for semantic search
 try:
@@ -345,6 +345,210 @@ def parse_generic_csv(filepath, format_spec, rules, home_locations=None, source_
                 continue
 
     return transactions
+
+
+def parse_supplemental_data(filepath, format_spec=None, vendor_name=None):
+    """
+    Parse supplemental transaction data (e.g., Amazon order history).
+    
+    Supplemental data provides item-level details that can be matched to
+    transactions for better categorization. Expected format:
+    - Date, Amount, and item details (product name, category, etc.)
+    
+    Args:
+        filepath: Path to supplemental data CSV file
+        format_spec: Optional FormatSpec for custom format (if None, auto-detect)
+        vendor_name: Name of vendor (e.g., "AMAZON") for matching
+        
+    Returns:
+        List of supplemental data dictionaries with:
+        - date: datetime object
+        - amount: float
+        - items: list of item dicts with product/category info
+        - vendor: vendor name
+    """
+    import csv
+    from datetime import datetime, timedelta
+    
+    supplemental = []
+    
+    if not os.path.exists(filepath):
+        return []
+    
+    # If no format spec, try to auto-detect or use default Amazon format
+    if format_spec is None:
+        # Default format for Amazon order history (common export format)
+        # Expected columns: Order Date, Order ID, Title, Category, Item Total
+        # User can override with custom format in config
+        try:
+            format_spec = parse_format_string(
+                '{date:%m/%d/%Y},{order_id},{title},{category},{amount}',
+                description_template='{title}'
+            )
+        except ValueError:
+            # If default format fails, return empty (user must provide format)
+            return []
+    
+    with open(filepath, 'r', encoding='utf-8') as f:
+        reader = csv.reader(f)
+        
+        # Skip header
+        if format_spec.has_header:
+            next(reader, None)
+        
+        # Group items by order (prefer order_id, fallback to date + amount)
+        orders = {}  # order_key -> order dict
+        
+        for row in reader:
+            try:
+                if len(row) <= max(format_spec.date_column, format_spec.amount_column):
+                    continue
+                
+                date_str = row[format_spec.date_column].strip()
+                amount_str = row[format_spec.amount_column].strip()
+                
+                if not date_str or not amount_str:
+                    continue
+                
+                # Parse date
+                date_str = date_str.split()[0]
+                date = datetime.strptime(date_str, format_spec.date_format)
+                
+                # Parse amount
+                amount = parse_amount(amount_str)
+                if amount == 0:
+                    continue
+                
+                # Extract item details
+                item = {}
+                order_id = None
+                if format_spec.custom_captures:
+                    for name, col_idx in format_spec.custom_captures.items():
+                        if col_idx < len(row):
+                            value = row[col_idx].strip()
+                            item[name] = value
+                            # Track order_id if available
+                            if name == 'order_id':
+                                order_id = value
+                
+                # Use description column if available
+                if format_spec.description_column is not None and format_spec.description_column < len(row):
+                    item['title'] = row[format_spec.description_column].strip()
+                
+                # Group items: prefer order_id + date, fallback to date + amount
+                if order_id:
+                    # Group by order_id and date (same order can have multiple items)
+                    order_key = (order_id, date.date())
+                else:
+                    # Fallback: group by date + amount
+                    order_key = (date.date(), round(amount, 2))
+                
+                if order_key not in orders:
+                    orders[order_key] = {
+                        'date': date,
+                        'amount': 0.0,  # Will sum up amounts for multi-item orders
+                        'items': [],
+                        'vendor': vendor_name or 'Unknown'
+                    }
+                
+                # Add item and accumulate amount
+                if item:
+                    orders[order_key]['items'].append(item)
+                orders[order_key]['amount'] += amount
+                    
+            except (ValueError, IndexError):
+                continue
+        
+        supplemental = list(orders.values())
+    
+    return supplemental
+
+
+def match_supplemental_data(transactions, supplemental_data_list, match_fields=None, vendor_pattern=None):
+    """
+    Match supplemental data to transactions based on date, amount, and vendor.
+    
+    Args:
+        transactions: List of transaction dictionaries
+        supplemental_data_list: List of supplemental data dictionaries
+        match_fields: List of fields to match on (default: ['date', 'amount'])
+        vendor_pattern: Regex pattern to match vendor name in transaction descriptions
+        
+    Returns:
+        List of transactions with added 'supplemental' field containing matched item data
+    """
+    import re
+    from datetime import timedelta
+    
+    if match_fields is None:
+        match_fields = ['date', 'amount']
+    
+    if vendor_pattern is None:
+        vendor_pattern = r'.*'
+    
+    # Build index of supplemental data by match key
+    supplemental_index = {}
+    for supp in supplemental_data_list:
+        # Create match key based on match_fields
+        match_key_parts = []
+        for field in match_fields:
+            if field == 'date':
+                match_key_parts.append(supp['date'].date().isoformat())
+            elif field == 'amount':
+                # Round to 2 decimal places for matching
+                match_key_parts.append(str(round(supp['amount'], 2)))
+            else:
+                match_key_parts.append(str(supp.get(field, '')))
+        
+        match_key = '|'.join(match_key_parts)
+        if match_key not in supplemental_index:
+            supplemental_index[match_key] = []
+        supplemental_index[match_key].append(supp)
+    
+    # Match transactions to supplemental data
+    matched_count = 0
+    for txn in transactions:
+        # Check if transaction matches vendor pattern
+        description = txn.get('description', '') or txn.get('raw_description', '')
+        if not re.search(vendor_pattern, description, re.IGNORECASE):
+            continue
+        
+        # Build match key for transaction
+        txn_match_key_parts = []
+        for field in match_fields:
+            if field == 'date':
+                txn_match_key_parts.append(txn['date'].date().isoformat())
+            elif field == 'amount':
+                txn_match_key_parts.append(str(round(abs(txn['amount']), 2)))
+            else:
+                txn_match_key_parts.append(str(txn.get(field, '')))
+        
+        txn_match_key = '|'.join(txn_match_key_parts)
+        
+        # Try exact match first
+        if txn_match_key in supplemental_index:
+            # Use first match (could enhance to handle multiple matches)
+            txn['supplemental'] = supplemental_index[txn_match_key][0]
+            matched_count += 1
+        else:
+            # Try fuzzy matching (within 1 day and small amount difference)
+            txn_date = txn['date'].date()
+            txn_amount = abs(txn['amount'])
+            
+            for supp in supplemental_data_list:
+                supp_date = supp['date'].date()
+                supp_amount = abs(supp['amount'])
+                
+                # Check if within 1 day and amount within $0.50
+                date_diff = abs((txn_date - supp_date).days)
+                amount_diff = abs(txn_amount - supp_amount)
+                
+                if date_diff <= 1 and amount_diff <= 0.50:
+                    txn['supplemental'] = supp
+                    matched_count += 1
+                    break
+    
+    return matched_count
 
 
 def auto_detect_csv_format(filepath):

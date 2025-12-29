@@ -1362,3 +1362,88 @@ def normalize_merchant(
     # Fallback: extract merchant name from description, categorize as Unknown
     merchant_name = extract_merchant_name(description)
     return (merchant_name, 'Unknown', 'Unknown', None)
+
+
+def categorize_with_supplemental_data(transaction, rules):
+    """
+    Re-categorize a transaction using supplemental item-level data if available.
+    
+    This function uses item details from supplemental data (e.g., Amazon order history)
+    to improve categorization when the transaction description alone isn't enough.
+    
+    Args:
+        transaction: Transaction dict (may have 'supplemental' field)
+        rules: Merchant categorization rules
+        
+    Returns:
+        Tuple of (merchant_name, category, subcategory, match_info) or None if no change
+    """
+    supplemental = transaction.get('supplemental')
+    if not supplemental or not supplemental.get('items'):
+        return None
+    
+    # Try to categorize based on item details
+    items = supplemental['items']
+    
+    # Common category mappings based on item keywords
+    category_keywords = {
+        'Food': {
+            'keywords': ['food', 'grocery', 'snack', 'beverage', 'coffee', 'tea', 'cereal', 'pasta', 'rice', 'bread'],
+            'subcategories': {
+                'grocery': ['grocery', 'food', 'snack', 'cereal', 'pasta', 'rice', 'bread'],
+                'beverage': ['coffee', 'tea', 'beverage', 'drink'],
+            }
+        },
+        'Shopping': {
+            'keywords': ['electronics', 'computer', 'phone', 'tablet', 'headphones', 'camera', 'tv', 'monitor'],
+            'subcategories': {
+                'electronics': ['electronics', 'computer', 'phone', 'tablet', 'headphones', 'camera', 'tv', 'monitor'],
+                'clothing': ['clothing', 'shirt', 'pants', 'shoes', 'dress'],
+                'home': ['home', 'furniture', 'kitchen', 'bedding', 'decor'],
+            }
+        },
+        'Health': {
+            'keywords': ['vitamin', 'supplement', 'medicine', 'pharmacy', 'health', 'medical'],
+            'subcategories': {
+                'pharmacy': ['vitamin', 'supplement', 'medicine', 'pharmacy'],
+            }
+        },
+        'Books': {
+            'keywords': ['book', 'ebook', 'kindle', 'novel'],
+            'subcategories': {
+                'books': ['book', 'ebook', 'kindle', 'novel'],
+            }
+        },
+    }
+    
+    # Check each item for category hints
+    for item in items:
+        # Get item title/description
+        item_text = ' '.join([
+            str(item.get('title', '')),
+            str(item.get('category', '')),
+            str(item.get('name', '')),
+        ]).lower()
+        
+        if not item_text:
+            continue
+        
+        # Try to match category keywords
+        for category, cat_info in category_keywords.items():
+            if any(keyword in item_text for keyword in cat_info['keywords']):
+                # Determine subcategory
+                subcategory = 'General'
+                for subcat, subcat_keywords in cat_info.get('subcategories', {}).items():
+                    if any(keyword in item_text for keyword in subcat_keywords):
+                        subcategory = subcat.title()
+                        break
+                
+                # Return enhanced categorization
+                merchant = transaction.get('merchant', 'Unknown')
+                return (merchant, category, subcategory, {
+                    'pattern': 'supplemental_data',
+                    'source': 'supplemental',
+                    'item_matched': item.get('title', '')[:50]  # First 50 chars
+                })
+    
+    return None

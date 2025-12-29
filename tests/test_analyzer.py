@@ -3,6 +3,7 @@
 import pytest
 import tempfile
 import os
+from datetime import datetime
 
 from tally.analyzer import parse_amount, parse_generic_csv
 from tally.format_parser import parse_format_string
@@ -331,3 +332,131 @@ class TestCurrencyFormatting:
         from tally.analyzer import format_currency
         assert format_currency(-1234) == "$-1,234"
         assert format_currency(-1234, "{amount} zł") == "-1,234 zł"
+
+
+class TestSupplementalData:
+    """Tests for supplemental transaction data parsing and matching."""
+
+    def test_parse_supplemental_data_amazon_format(self):
+        """Test parsing Amazon order history format."""
+        from tally.analyzer import parse_supplemental_data
+        from tally.format_parser import parse_format_string
+        
+        csv_content = """Order Date,Order ID,Title,Category,Item Total
+01/15/2025,123-4567890-1234567,Wireless Headphones,Electronics,49.99
+01/15/2025,123-4567890-1234567,USB Cable,Electronics,9.99
+01/20/2025,987-6543210-9876543,Organic Coffee Beans,Food & Grocery,12.99
+"""
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
+            f.write(csv_content)
+            f.flush()
+            filepath = f.name
+        
+        try:
+            format_spec = parse_format_string(
+                '{date:%m/%d/%Y},{order_id},{title},{category},{amount}',
+                description_template='{title}'
+            )
+            supp_data = parse_supplemental_data(filepath, format_spec, 'AMAZON')
+            
+            # Should group items by order_id (same order_id = same order)
+            assert len(supp_data) == 2  # Two unique orders
+            
+            # First order should have 2 items (grouped by order_id)
+            # Amount should be sum: 49.99 + 9.99 = 59.98
+            order1 = [o for o in supp_data if len(o['items']) == 2][0]
+            assert len(order1['items']) == 2  # Headphones + USB Cable grouped
+            assert abs(order1['amount'] - 59.98) < 0.01  # Sum of both items (handle float precision)
+            assert order1['date'].date().isoformat() == '2025-01-15'
+            
+            # Second order should have 1 item
+            order2 = [o for o in supp_data if len(o['items']) == 1][0]
+            assert len(order2['items']) == 1
+            assert order2['amount'] == 12.99
+            assert order2['date'].date().isoformat() == '2025-01-20'
+        finally:
+            if os.path.exists(filepath):
+                os.unlink(filepath)
+
+    def test_match_supplemental_data(self):
+        """Test matching supplemental data to transactions."""
+        from tally.analyzer import match_supplemental_data
+        from datetime import datetime
+        
+        transactions = [
+            {
+                'date': datetime(2025, 1, 15),
+                'description': 'AMAZON.COM',
+                'amount': 49.99,
+                'merchant': 'Amazon',
+                'category': 'Shopping',
+                'subcategory': 'Online'
+            },
+            {
+                'date': datetime(2025, 1, 20),
+                'description': 'AMAZON MARKETPLACE',
+                'amount': 12.99,
+                'merchant': 'Amazon',
+                'category': 'Shopping',
+                'subcategory': 'Online'
+            }
+        ]
+        
+        supplemental_data = [
+            {
+                'date': datetime(2025, 1, 15),
+                'amount': 49.99,
+                'items': [
+                    {'title': 'Wireless Headphones', 'category': 'Electronics'}
+                ],
+                'vendor': 'AMAZON'
+            },
+            {
+                'date': datetime(2025, 1, 20),
+                'amount': 12.99,
+                'items': [
+                    {'title': 'Organic Coffee Beans', 'category': 'Food & Grocery'}
+                ],
+                'vendor': 'AMAZON'
+            }
+        ]
+        
+        matched = match_supplemental_data(
+            transactions,
+            supplemental_data,
+            match_fields=['date', 'amount'],
+            vendor_pattern='AMAZON.*'
+        )
+        
+        assert matched == 2
+        assert 'supplemental' in transactions[0]
+        assert 'supplemental' in transactions[1]
+        assert transactions[0]['supplemental']['items'][0]['title'] == 'Wireless Headphones'
+        assert transactions[1]['supplemental']['items'][0]['title'] == 'Organic Coffee Beans'
+
+    def test_categorize_with_supplemental_data(self):
+        """Test categorization enhancement using supplemental data."""
+        from tally.merchant_utils import categorize_with_supplemental_data, get_all_rules
+        
+        transaction = {
+            'date': datetime(2025, 1, 15),
+            'description': 'AMAZON.COM',
+            'amount': 49.99,
+            'merchant': 'Amazon',
+            'category': 'Shopping',
+            'subcategory': 'Online',
+            'supplemental': {
+                'items': [
+                    {'title': 'Organic Coffee Beans', 'category': 'Food & Grocery'}
+                ]
+            }
+        }
+        
+        rules = get_all_rules()
+        enhanced = categorize_with_supplemental_data(transaction, rules)
+        
+        # Should re-categorize based on item (coffee -> Food)
+        assert enhanced is not None
+        merchant, category, subcategory, match_info = enhanced
+        assert category == 'Food'
+        assert match_info['source'] == 'supplemental'

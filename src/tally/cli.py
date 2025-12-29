@@ -36,6 +36,8 @@ from .analyzer import (
     analyze_transactions,
     print_summary,
     write_summary_file,
+    parse_supplemental_data,
+    match_supplemental_data,
 )
 
 
@@ -1384,6 +1386,63 @@ def cmd_run(args):
             from .analyzer import is_travel_location
             for txn in all_txns:
                 txn['is_travel'] = is_travel_location(txn.get('location'), home_locations)
+
+    # Load and match supplemental data (e.g., Amazon order history)
+    supplemental_sources = config.get('supplemental_sources', [])
+    if supplemental_sources:
+        if not args.quiet:
+            print("\nLoading supplemental data...")
+        
+        all_supplemental = []
+        for supp_source in supplemental_sources:
+            filepath = supp_source.get('_filepath')
+            if not filepath or not os.path.exists(filepath):
+                if not args.quiet:
+                    print(f"  {supp_source.get('name', 'Unknown')}: File not found - {supp_source.get('file', '')}")
+                continue
+            
+            try:
+                format_spec = supp_source.get('_format_spec')
+                vendor_name = supp_source.get('vendor', '')
+                supp_data = parse_supplemental_data(filepath, format_spec, vendor_name)
+                all_supplemental.extend(supp_data)
+                if not args.quiet:
+                    print(f"  {supp_source.get('name', 'Unknown')}: {len(supp_data)} orders/items")
+            except Exception as e:
+                if not args.quiet:
+                    print(f"  {supp_source.get('name', 'Unknown')}: Error parsing - {e}")
+                continue
+        
+        # Match supplemental data to transactions
+        if all_supplemental:
+            import re
+            matched_count = 0
+            for supp_source in supplemental_sources:
+                vendor_pattern = supp_source.get('vendor_pattern', supp_source.get('vendor', ''))
+                match_fields = supp_source.get('match_fields', ['date', 'amount'])
+                count = match_supplemental_data(
+                    all_txns,
+                    all_supplemental,
+                    match_fields=match_fields,
+                    vendor_pattern=vendor_pattern
+                )
+                matched_count += count
+            
+            if not args.quiet:
+                print(f"  Matched {matched_count} transactions with supplemental data")
+            
+            # Re-categorize transactions using supplemental data
+            from .merchant_utils import categorize_with_supplemental_data
+            enhanced_count = 0
+            for txn in all_txns:
+                if txn.get('supplemental'):
+                    enhanced = categorize_with_supplemental_data(txn, rules)
+                    if enhanced:
+                        txn['merchant'], txn['category'], txn['subcategory'], txn['match_info'] = enhanced
+                        enhanced_count += 1
+            
+            if not args.quiet and enhanced_count > 0:
+                print(f"  Enhanced categorization for {enhanced_count} transactions")
 
     if not args.quiet:
         print(f"\nTotal: {len(all_txns)} transactions")

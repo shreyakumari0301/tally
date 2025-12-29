@@ -197,4 +197,65 @@ def load_config(config_dir, settings_file='settings.yaml'):
     # Currency format for display (default: USD)
     config['currency_format'] = config.get('currency_format', '${amount}')
 
+    # Process supplemental data sources (for item-level categorization)
+    # These are optional and used to enrich transactions with item details
+    if config.get('supplemental_sources'):
+        config['supplemental_sources'] = [
+            resolve_supplemental_source(source, config_dir)
+            for source in config['supplemental_sources']
+        ]
+    else:
+        config['supplemental_sources'] = []
+
     return config
+
+
+def resolve_supplemental_source(source, config_dir):
+    """
+    Resolve a supplemental data source configuration.
+    
+    Supplemental sources provide item-level data (e.g., Amazon order history)
+    that can be matched to transactions for better categorization.
+    
+    Args:
+        source: Source dict from config
+        config_dir: Config directory path
+        
+    Returns:
+        Source dict with resolved file path and format spec
+    """
+    source = source.copy()
+    
+    # Resolve file path
+    filepath = os.path.join(config_dir, '..', source['file'])
+    filepath = os.path.normpath(filepath)
+    
+    if not os.path.exists(filepath):
+        filepath = os.path.join(os.path.dirname(config_dir), source['file'])
+    
+    source['_filepath'] = filepath
+    
+    # Parse format if provided
+    if 'format' in source:
+        format_str = source['format']
+        columns = source.get('columns', {})
+        description_template = columns.get('description') if isinstance(columns, dict) else None
+        
+        try:
+            source['_format_spec'] = parse_format_string(format_str, description_template)
+        except ValueError as e:
+            raise ValueError(f"Invalid format for supplemental source '{source.get('name', 'unknown')}': {e}")
+    else:
+        # Default format for supplemental data (assumes common structure)
+        # Can be overridden by user
+        source['_format_spec'] = None
+    
+    # Validate required fields
+    if 'vendor' not in source:
+        raise ValueError(f"Supplemental source '{source.get('name', 'unknown')}' must specify 'vendor' (merchant name to match)")
+    
+    if 'match_fields' not in source:
+        # Default: match by date and amount
+        source['match_fields'] = ['date', 'amount']
+    
+    return source
