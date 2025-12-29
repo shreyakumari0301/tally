@@ -50,6 +50,7 @@ Both `tally run` and `tally explain` support multiple output formats:
 ```bash
 tally run --format json        # JSON with classification reasoning
 tally run --format markdown    # Markdown report
+tally run --format csv         # CSV for Excel/spreadsheet import
 tally run --format summary     # Text summary only
 tally run -v                   # Verbose: include decision trace
 tally run -vv                  # Very verbose: include thresholds, CV values
@@ -62,8 +63,35 @@ Filter output to specific classifications or categories:
 ```bash
 tally run --format json --only monthly,variable   # Just these classifications
 tally run --format json --category Food           # Just Food category
+tally run --format csv --only monthly             # Export only monthly transactions to CSV
+tally run --format csv --category Food > food.csv # Export Food category to CSV file
 tally explain --classification monthly            # Explain all monthly merchants
 tally explain --category Subscriptions            # Explain all subscriptions
+```
+
+### CSV Export
+
+The CSV format exports all transactions with their classifications, making it easy to import into Excel, Google Sheets, or other spreadsheet tools:
+
+```bash
+tally run --format csv > spending.csv
+```
+
+The CSV includes the following columns:
+- **Date**: Transaction date (YYYY-MM-DD)
+- **Merchant**: Normalized merchant name
+- **Category**: Transaction category (e.g., Food, Bills, Shopping)
+- **Subcategory**: Transaction subcategory (e.g., Grocery, Subscriptions)
+- **Amount**: Transaction amount
+- **Classification**: Spending classification (monthly, variable, travel, etc.)
+- **Location**: Transaction location (state/country code)
+- **Source**: Data source (e.g., AMEX, BOA)
+- **Description**: Original transaction description
+
+You can combine CSV export with filters:
+```bash
+tally run --format csv --only monthly > monthly_recurring.csv
+tally run --format csv --category Food > food_spending.csv
 ```
 
 ## Configuration

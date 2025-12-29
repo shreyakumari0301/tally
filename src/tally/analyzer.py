@@ -1231,6 +1231,86 @@ def export_json(stats, verbose=0, only=None, category_filter=None, merchant_filt
     return json.dumps(output, indent=2)
 
 
+def export_csv(transactions, stats, only=None, category_filter=None):
+    """Export transactions as CSV for spreadsheet import.
+    
+    Args:
+        transactions: List of transaction dictionaries
+        stats: Analysis results from analyze_transactions()
+        only: List of classifications to include (e.g., ['monthly', 'variable'])
+        category_filter: Only include transactions in this category
+        
+    Returns: CSV string with header row
+    """
+    import csv
+    from io import StringIO
+    
+    # Build merchant -> classification mapping
+    merchant_classification = {}
+    all_sections = ['monthly', 'annual', 'periodic', 'travel', 'one_off', 'variable']
+    sections = only if only else all_sections
+    
+    for section in sections:
+        if section not in all_sections:
+            continue
+        merchants_dict = stats.get(f'{section}_merchants', {})
+        for merchant_name, data in merchants_dict.items():
+            merchant_classification[merchant_name] = section
+    
+    # Filter transactions
+    filtered_txns = []
+    for txn in transactions:
+        merchant = txn.get('merchant', '')
+        classification = merchant_classification.get(merchant, 'unknown')
+        
+        # Apply filters
+        if only and classification not in only:
+            continue
+        if category_filter and txn.get('category') != category_filter:
+            continue
+        
+        # Add classification to transaction
+        txn_copy = txn.copy()
+        txn_copy['classification'] = classification
+        filtered_txns.append(txn_copy)
+    
+    # Sort by date (most recent first)
+    filtered_txns.sort(key=lambda x: x['date'], reverse=True)
+    
+    # Write CSV
+    output = StringIO()
+    writer = csv.writer(output)
+    
+    # Header
+    writer.writerow([
+        'Date',
+        'Merchant',
+        'Category',
+        'Subcategory',
+        'Amount',
+        'Classification',
+        'Location',
+        'Source',
+        'Description'
+    ])
+    
+    # Rows
+    for txn in filtered_txns:
+        writer.writerow([
+            txn['date'].strftime('%Y-%m-%d'),
+            txn.get('merchant', ''),
+            txn.get('category', ''),
+            txn.get('subcategory', ''),
+            f"{txn.get('amount', 0):.2f}",
+            txn.get('classification', 'unknown'),
+            txn.get('location', '') or '',
+            txn.get('source', ''),
+            txn.get('raw_description', txn.get('description', ''))
+        ])
+    
+    return output.getvalue()
+
+
 def export_markdown(stats, verbose=0, only=None, category_filter=None, merchant_filter=None):
     """Export analysis results as Markdown with reasoning.
 

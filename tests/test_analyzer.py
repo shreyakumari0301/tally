@@ -545,3 +545,124 @@ class TestTravelOverride:
             assert match_info2 is not None
             assert match_info2.get('not_travel') == True
             assert merchant2 == 'Amazon UK'
+
+
+class TestCSVExport:
+    """Tests for CSV export functionality."""
+
+    def test_export_csv_basic(self):
+        """Test basic CSV export with transactions."""
+        from tally.analyzer import export_csv, analyze_transactions
+        
+        # Create sample transactions
+        transactions = [
+            {
+                'date': datetime(2025, 1, 15),
+                'merchant': 'Netflix',
+                'category': 'Bills',
+                'subcategory': 'Subscriptions',
+                'amount': 15.99,
+                'location': 'WA',
+                'source': 'AMEX',
+                'raw_description': 'NETFLIX.COM',
+                'description': 'Netflix',
+                'is_travel': False
+            },
+            {
+                'date': datetime(2025, 2, 15),
+                'merchant': 'Netflix',
+                'category': 'Bills',
+                'subcategory': 'Subscriptions',
+                'amount': 15.99,
+                'location': 'WA',
+                'source': 'AMEX',
+                'raw_description': 'NETFLIX.COM',
+                'description': 'Netflix',
+                'is_travel': False
+            },
+            {
+                'date': datetime(2025, 1, 20),
+                'merchant': 'Starbucks',
+                'category': 'Food',
+                'subcategory': 'Coffee',
+                'amount': 5.50,
+                'location': 'WA',
+                'source': 'AMEX',
+                'raw_description': 'STARBUCKS STORE 123',
+                'description': 'Starbucks',
+                'is_travel': False
+            }
+        ]
+        
+        # Analyze transactions
+        stats = analyze_transactions(transactions)
+        
+        # Export to CSV
+        csv_output = export_csv(transactions, stats)
+        
+        # Verify CSV structure
+        lines = csv_output.strip().split('\n')
+        assert len(lines) == 4  # Header + 3 transactions
+        
+        # Check header
+        assert 'Date' in lines[0]
+        assert 'Merchant' in lines[0]
+        assert 'Category' in lines[0]
+        assert 'Amount' in lines[0]
+        assert 'Classification' in lines[0]
+        
+        # Check that transactions are included
+        assert 'Netflix' in csv_output
+        assert 'Starbucks' in csv_output
+        assert '15.99' in csv_output
+        assert '5.50' in csv_output
+
+    def test_export_csv_with_filters(self):
+        """Test CSV export with classification and category filters."""
+        from tally.analyzer import export_csv, analyze_transactions
+        
+        # Create enough transactions for Netflix to be classified as monthly
+        # Need at least 50% of months (for 6 months, need 3+ transactions)
+        transactions = []
+        for month in range(1, 7):  # 6 months
+            transactions.append({
+                'date': datetime(2025, month, 15),
+                'merchant': 'Netflix',
+                'category': 'Bills',
+                'subcategory': 'Subscriptions',
+                'amount': 15.99,
+                'location': 'WA',
+                'source': 'AMEX',
+                'raw_description': 'NETFLIX.COM',
+                'description': 'Netflix',
+                'is_travel': False
+            })
+        
+        # Add a few Starbucks transactions (will be variable)
+        for month in [1, 3, 5]:
+            transactions.append({
+                'date': datetime(2025, month, 20),
+                'merchant': 'Starbucks',
+                'category': 'Food',
+                'subcategory': 'Coffee',
+                'amount': 5.50,
+                'location': 'WA',
+                'source': 'AMEX',
+                'raw_description': 'STARBUCKS STORE 123',
+                'description': 'Starbucks',
+                'is_travel': False
+            })
+        
+        stats = analyze_transactions(transactions)
+        
+        # Filter by classification - Netflix should be monthly
+        csv_output = export_csv(transactions, stats, only=['monthly'])
+        lines = csv_output.strip().split('\n')
+        # Should only include monthly transactions (Netflix)
+        assert 'Netflix' in csv_output
+        assert 'Starbucks' not in csv_output  # Starbucks is variable, not monthly
+        
+        # Filter by category
+        csv_output2 = export_csv(transactions, stats, category_filter='Food')
+        assert 'Starbucks' in csv_output2
+        assert 'Netflix' not in csv_output2  # Netflix is Bills, not Food

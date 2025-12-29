@@ -1476,6 +1476,10 @@ def cmd_run(args):
         # Markdown output with reasoning
         from .analyzer import export_markdown
         print(export_markdown(stats, verbose=verbose, only=only_filter, category_filter=category_filter))
+    elif output_format == 'csv':
+        # CSV output for spreadsheet import
+        from .analyzer import export_csv
+        print(export_csv(all_txns, stats, only=only_filter, category_filter=category_filter))
     elif output_format == 'summary' or args.summary:
         # Text summary only (no HTML)
         print_summary(stats, year=year, currency_format=currency_format)
@@ -2494,9 +2498,9 @@ Examples:
     )
     run_parser.add_argument(
         '--format', '-f',
-        choices=['html', 'json', 'markdown', 'summary'],
+        choices=['html', 'json', 'markdown', 'csv', 'summary'],
         default='html',
-        help='Output format: html (default), json (with reasoning), markdown, summary (text)'
+        help='Output format: html (default), json (with reasoning), markdown, csv (for Excel), summary (text)'
     )
     run_parser.add_argument(
         '-v', '--verbose',
