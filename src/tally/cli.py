@@ -1282,6 +1282,8 @@ def cmd_run(args):
     year = config.get('year', 2025)
     home_locations = config.get('home_locations', set())
     travel_labels = config.get('travel_labels', {})
+    travel_override = config.get('travel_override', set())
+    disable_auto_travel = config.get('disable_auto_travel', False)
     data_sources = config.get('data_sources', [])
 
     # Check for data sources early before printing anything
@@ -1333,14 +1335,16 @@ def cmd_run(args):
 
         try:
             if parser_type == 'amex':
-                txns = parse_amex(filepath, rules, home_locations)
+                txns = parse_amex(filepath, rules, home_locations, travel_override, disable_auto_travel)
             elif parser_type == 'boa':
-                txns = parse_boa(filepath, rules, home_locations)
+                txns = parse_boa(filepath, rules, home_locations, travel_override, disable_auto_travel)
             elif parser_type == 'generic' and format_spec:
                 txns = parse_generic_csv(filepath, format_spec, rules,
                                          home_locations,
                                          source_name=source.get('name', 'CSV'),
-                                         decimal_separator=source.get('decimal_separator', '.'))
+                                         decimal_separator=source.get('decimal_separator', '.'),
+                                         travel_override=travel_override,
+                                         disable_auto_travel=disable_auto_travel)
             else:
                 if not args.quiet:
                     print(f"  {source['name']}: Unknown parser type '{parser_type}'")
@@ -1362,19 +1366,11 @@ def cmd_run(args):
     # Auto-detect home location if not specified
     if not home_locations:
         from collections import Counter
-        # US state codes for filtering
-        us_states = {
-            'AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA',
-            'HI', 'ID', 'IL', 'IN', 'IA', 'KS', 'KY', 'LA', 'ME', 'MD',
-            'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ',
-            'NM', 'NY', 'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC',
-            'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY',
-            'DC', 'PR', 'VI', 'GU'
-        }
+        from .analyzer import US_STATES
         # Count US state locations
         location_counts = Counter(
             txn['location'] for txn in all_txns
-            if txn.get('location') and txn['location'] in us_states
+            if txn.get('location') and txn['location'] in US_STATES
         )
         if location_counts:
             # Most common location is likely home
@@ -1385,7 +1381,7 @@ def cmd_run(args):
             # Update is_travel on transactions now that we know home
             from .analyzer import is_travel_location
             for txn in all_txns:
-                txn['is_travel'] = is_travel_location(txn.get('location'), home_locations)
+                txn['is_travel'] = is_travel_location(txn.get('location'), home_locations, travel_override, disable_auto_travel)
 
     # Load and match supplemental data (e.g., Amazon order history)
     supplemental_sources = config.get('supplemental_sources', [])

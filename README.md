@@ -126,6 +126,27 @@ Patterns are Python regex (case-insensitive). First match wins.
 **Inline modifiers** target specific transactions:
 - `[amount>200]`, `[amount:50-100]` - Amount conditions
 - `[date=2025-01-15]`, `[month=12]` - Date conditions
+- `[not_travel]` - Override automatic travel detection for this merchant
+
+### Travel Detection & Overrides
+
+International transactions are automatically classified as travel. You can override this behavior:
+
+**In settings.yaml:**
+```yaml
+# Exclude specific locations from auto-travel
+travel_override:
+  - GB  # If you live in UK, exclude it from travel
+  - CA  # Exclude Canada
+
+# Or disable auto-travel entirely
+disable_auto_travel: true
+```
+
+**In merchant_categories.csv:**
+```csv
+AMAZON.*GB[not_travel],Amazon UK,Shopping,Online
+```
 
 ## For AI Agents
 

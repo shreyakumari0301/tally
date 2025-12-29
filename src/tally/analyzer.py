@@ -14,6 +14,16 @@ from datetime import datetime
 from .merchant_utils import normalize_merchant
 from .format_parser import FormatSpec, parse_format_string
 
+# US state codes - used for travel detection (shared constant)
+US_STATES = {
+    'AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA',
+    'HI', 'ID', 'IL', 'IN', 'IA', 'KS', 'KY', 'LA', 'ME', 'MD',
+    'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ',
+    'NM', 'NY', 'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC',
+    'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY',
+    'DC', 'PR', 'VI', 'GU'
+}
+
 # Try to import sentence_transformers for semantic search
 try:
     from sentence_transformers import SentenceTransformer
@@ -103,7 +113,7 @@ def extract_location(description):
     return None
 
 
-def is_travel_location(location, home_locations):
+def is_travel_location(location, home_locations, travel_override=None, disable_auto_travel=False):
     """Determine if a location represents travel (away from home).
 
     Only international locations (outside US) are automatically considered travel.
@@ -113,6 +123,8 @@ def is_travel_location(location, home_locations):
     Args:
         location: 2-letter location code (state or country)
         home_locations: Set of location codes considered "home"
+        travel_override: Set of location codes that should NOT be considered travel
+        disable_auto_travel: If True, disable automatic travel detection
 
     Returns:
         True if this is a travel location, False otherwise
@@ -120,34 +132,34 @@ def is_travel_location(location, home_locations):
     if not location:
         return False
 
-    # US state codes
-    us_states = {
-        'AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA',
-        'HI', 'ID', 'IL', 'IN', 'IA', 'KS', 'KY', 'LA', 'ME', 'MD',
-        'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ',
-        'NM', 'NY', 'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC',
-        'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY',
-        'DC', 'PR', 'VI', 'GU'
-    }
+    travel_override = travel_override or set()
 
-    location = location.upper()
+    # Check override first - if location is in travel_override, it's NOT travel
+    location_upper = location.upper()
+    if location_upper in travel_override:
+        return False
+
+    # If auto-travel is disabled, only merchant rules can mark as travel
+    if disable_auto_travel:
+        return False
 
     # International (not a US state) = travel unless explicitly in home_locations
-    if location not in us_states:
-        return location not in home_locations
+    if location_upper not in US_STATES:
+        return location_upper not in home_locations
 
     # Domestic US states = NOT travel by default
     # Users can mark specific locations as travel via merchant_categories.csv
     return False
 
 
-def parse_amex(filepath, rules, home_locations=None):
+def parse_amex(filepath, rules, home_locations=None, travel_override=None, disable_auto_travel=False):
     """Parse AMEX CSV file and return list of transactions.
 
     Handles both positive amounts (expenses) and negative amounts (AMEX exports
     often use negative for charges). Credits/refunds are skipped.
     """
     home_locations = home_locations or set()
+    travel_override = travel_override or set()
     transactions = []
 
     with open(filepath, 'r', encoding='utf-8') as f:
@@ -181,7 +193,7 @@ def parse_amex(filepath, rules, home_locations=None):
                     'subcategory': subcategory,
                     'source': 'AMEX',
                     'location': location,
-                    'is_travel': is_travel_location(location, home_locations),
+                    'is_travel': is_travel_location(location, home_locations, travel_override, disable_auto_travel),
                     'match_info': match_info,
                 })
             except (ValueError, KeyError):
@@ -190,9 +202,10 @@ def parse_amex(filepath, rules, home_locations=None):
     return transactions
 
 
-def parse_boa(filepath, rules, home_locations=None):
+def parse_boa(filepath, rules, home_locations=None, travel_override=None, disable_auto_travel=False):
     """Parse BOA statement file and return list of transactions."""
     home_locations = home_locations or set()
+    travel_override = travel_override or set()
     transactions = []
 
     with open(filepath, 'r', encoding='utf-8') as f:
@@ -236,7 +249,7 @@ def parse_boa(filepath, rules, home_locations=None):
     return transactions
 
 
-def parse_generic_csv(filepath, format_spec, rules, home_locations=None, source_name='CSV', decimal_separator='.'):
+def parse_generic_csv(filepath, format_spec, rules, home_locations=None, source_name='CSV', decimal_separator='.', travel_override=None, disable_auto_travel=False):
     """
     Parse a CSV file using a custom format specification.
 
@@ -247,11 +260,14 @@ def parse_generic_csv(filepath, format_spec, rules, home_locations=None, source_
         home_locations: Set of location codes considered "home"
         source_name: Name to use for transaction source (default: 'CSV')
         decimal_separator: Character used as decimal separator ('.' or ',')
+        travel_override: Set of location codes that should NOT be considered travel
+        disable_auto_travel: If True, disable automatic travel detection
 
     Returns:
         List of transaction dictionaries
     """
     home_locations = home_locations or set()
+    travel_override = travel_override or set()
     transactions = []
 
     with open(filepath, 'r', encoding='utf-8') as f:
@@ -335,7 +351,7 @@ def parse_generic_csv(filepath, format_spec, rules, home_locations=None, source_
                     'subcategory': subcategory,
                     'source': format_spec.source_name or source_name,
                     'location': location,
-                    'is_travel': is_travel_location(location, home_locations),
+                    'is_travel': is_travel_location(location, home_locations, travel_override, disable_auto_travel),
                     'is_credit': is_credit,
                     'match_info': match_info,
                 })
@@ -694,9 +710,18 @@ def classify_by_occurrence(merchant, data, num_months=12):
     # TRAVEL: Either explicit travel category OR location-based travel flag
     # - category='Travel' from merchant rules (airlines, hotels, etc.)
     # - is_travel=True from international location detection
+    # BUT: [not_travel] modifier can override this
     # =========================================================================
     is_travel = data.get('is_travel', False)
-    if category == 'Travel' or is_travel:
+    
+    # Check if merchant has [not_travel] modifier (optimized: tracked during aggregation)
+    has_not_travel_modifier = data.get('has_not_travel', False)
+    
+    if has_not_travel_modifier:
+        reasoning['trace'].append(f"✗ NOT travel: [not_travel] modifier overrides travel detection")
+        reasoning['decision'] = "Not travel: explicitly marked with [not_travel] modifier"
+        # Continue to next classification check (don't return travel)
+    elif category == 'Travel' or is_travel:
         if category == 'Travel':
             reasoning['trace'].append(f"✓ IS travel: category=Travel")
             reasoning['decision'] = "Travel: category is Travel"
@@ -704,7 +729,8 @@ def classify_by_occurrence(merchant, data, num_months=12):
             reasoning['trace'].append(f"✓ IS travel: is_travel=true (location-based)")
             reasoning['decision'] = "Travel: international location detected"
         return ('travel', reasoning)
-    reasoning['trace'].append(f"✗ NOT travel: category={category}, is_travel=false")
+    else:
+        reasoning['trace'].append(f"✗ NOT travel: category={category}, is_travel=false")
 
     # =========================================================================
     # ANNUAL BILLS: True once-a-year expenses
@@ -897,7 +923,8 @@ def analyze_transactions(transactions):
             'description': txn['description'],
             'amount': txn['amount'],
             'source': txn['source'],
-            'location': txn.get('location')
+            'location': txn.get('location'),
+            'match_info': txn.get('match_info')  # Preserve match_info for [not_travel] check
         })
         # Track max payment
         if txn['amount'] > by_merchant[txn['merchant']]['max_payment']:
@@ -905,6 +932,9 @@ def analyze_transactions(transactions):
         # Mark merchant as travel if ANY transaction is travel (location-based)
         if txn.get('is_travel'):
             by_merchant[txn['merchant']]['is_travel'] = True
+        # Track if any transaction has [not_travel] modifier (optimized: avoid iterating later)
+        if txn.get('match_info', {}).get('not_travel', False):
+            by_merchant[txn['merchant']]['has_not_travel'] = True
         # Store match info (pattern that matched) - first transaction sets this
         if 'match_info' not in by_merchant[txn['merchant']] and txn.get('match_info'):
             by_merchant[txn['merchant']]['match_info'] = txn['match_info']
@@ -1581,17 +1611,15 @@ def write_summary_file(stats, filepath, year=2025, home_locations=None, currency
     true_monthly = stats['monthly_avg'] + stats['variable_monthly']
     non_recurring_total = stats['annual_total'] + stats['periodic_total'] + stats['travel_total'] + stats['one_off_total']
 
-    # US states set for location classification
-    us_states = {'AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID','IL','IN','IA','KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY','DC'}
-
     def location_badge(loc):
         """Generate HTML for location badge."""
         if not loc:
             return ''
         onclick = f"addFilterFromCell(event, this, 'location')"
-        if loc in home_locations:
+        loc_upper = loc.upper()
+        if loc_upper in home_locations:
             return f'<span class="txn-location home clickable" onclick="{onclick}">{loc}</span>'
-        elif loc not in us_states:
+        elif loc_upper not in US_STATES:
             return f'<span class="txn-location intl clickable" onclick="{onclick}">{loc}</span>'
         else:
             return f'<span class="txn-location clickable" onclick="{onclick}">{loc}</span>'

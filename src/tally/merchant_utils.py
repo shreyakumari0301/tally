@@ -1354,7 +1354,12 @@ def normalize_merchant(
                 if not check_all_conditions(parsed, amount, txn_date):
                     continue
 
-            return (merchant, category, subcategory, {'pattern': pattern, 'source': source})
+            # Include not_travel flag in match_info if present
+            match_info = {'pattern': pattern, 'source': source}
+            if parsed and parsed.not_travel:
+                match_info['not_travel'] = True
+
+            return (merchant, category, subcategory, match_info)
         except re.error:
             # Invalid regex pattern, skip
             continue

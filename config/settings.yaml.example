@@ -54,6 +54,18 @@ data_sources:
 # Location settings
 home_state: WA  # Used for badge coloring (green for home state)
 
+# Travel detection settings (optional)
+# home_locations:
+#   - WA  # Your home location(s) - international transactions outside these are auto-travel
+#   - OR  # Can specify multiple locations
+
+# travel_override:
+#   - GB  # Locations that should NOT be considered travel (e.g., if you live abroad)
+#   - CA  # Useful for excluding specific countries/states from auto-travel detection
+
+# disable_auto_travel: false  # If true, disables automatic travel detection entirely
+                              # Only merchant rules with Travel category will mark as travel
+
 # Output settings
 output_dir: output
 html_filename: spending_summary.html

@@ -191,6 +191,16 @@ def load_config(config_dir, settings_file='settings.yaml'):
     travel_labels = config.get('travel_labels', {})
     config['travel_labels'] = {k.upper(): v for k, v in travel_labels.items()}
 
+    # Normalize travel_override to a set of uppercase location codes
+    # Locations in this list will NOT be considered travel even if international
+    travel_override = config.get('travel_override', [])
+    if isinstance(travel_override, str):
+        travel_override = [travel_override]
+    config['travel_override'] = {loc.upper() for loc in travel_override}
+
+    # Disable auto-travel detection if configured
+    config['disable_auto_travel'] = config.get('disable_auto_travel', False)
+
     # Store config dir for reference
     config['_config_dir'] = config_dir
 

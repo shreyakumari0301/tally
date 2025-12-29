@@ -37,6 +37,7 @@ class ParsedPattern:
     regex_pattern: str
     amount_conditions: List[AmountCondition] = field(default_factory=list)
     date_conditions: List[DateCondition] = field(default_factory=list)
+    not_travel: bool = False  # If True, this pattern explicitly marks transaction as NOT travel
 
 
 class ModifierParseError(ValueError):
@@ -47,7 +48,7 @@ class ModifierParseError(ValueError):
 # Regex patterns for parsing modifiers
 # Only match modifiers at the END of the pattern string
 # Must start with known keywords to avoid confusion with regex char classes like [A-Z]
-MODIFIER_BLOCK_PATTERN = re.compile(r'\[(amount|date|month)([^\]]*)\]')
+MODIFIER_BLOCK_PATTERN = re.compile(r'\[(amount|date|month|not_travel)([^\]]*)\]')
 
 # Individual modifier value patterns
 AMOUNT_GT = re.compile(r'^\s*>\s*([\d.]+)\s*$')
@@ -87,10 +88,11 @@ def parse_pattern_with_modifiers(pattern_str: str) -> ParsedPattern:
 
     amount_conditions = []
     date_conditions = []
+    not_travel_flag = False
 
     # Find all modifier blocks and their positions
     # We need to identify which [...] blocks are modifiers vs regex char classes
-    # Strategy: scan from the end, looking for [amount...], [date...], [month...]
+    # Strategy: scan from the end, looking for [amount...], [date...], [month...], [not_travel]
 
     remaining = pattern_str
 
@@ -119,6 +121,11 @@ def parse_pattern_with_modifiers(pattern_str: str) -> ParsedPattern:
             elif keyword == 'month':
                 cond = _parse_month_modifier(value_part)
                 date_conditions.insert(0, cond)
+            elif keyword == 'not_travel':
+                # [not_travel] modifier - no value part needed
+                if value_part.strip():
+                    raise ModifierParseError(f"Invalid not_travel modifier: [not_travel{value_part}]. Use [not_travel] with no value.")
+                not_travel_flag = True
         except ModifierParseError:
             raise
         except Exception as e:
@@ -130,7 +137,8 @@ def parse_pattern_with_modifiers(pattern_str: str) -> ParsedPattern:
     return ParsedPattern(
         regex_pattern=remaining,
         amount_conditions=amount_conditions,
-        date_conditions=date_conditions
+        date_conditions=date_conditions,
+        not_travel=not_travel_flag
     )
 
 
