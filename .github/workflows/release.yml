@@ -16,6 +16,9 @@ jobs:
       contents: write
 
     steps:
+      - name: Checkout (for gh CLI context)
+        uses: actions/checkout@v4
+
       - name: Find latest draft release
         id: draft
         run: |
