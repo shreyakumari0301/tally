@@ -41,6 +41,7 @@ tally workflow              # See next steps
 | `tally run --format json` | Output analysis as JSON with reasoning |
 | `tally explain` | Explain why merchants are classified the way they are |
 | `tally explain <merchant>` | Explain specific merchant's classification |
+| `tally explain "RAW_DESC" --date YYYY-MM-DD` | Explain specific transaction |
 | `tally discover` | Find uncategorized transactions (`--format json` for LLMs) |
 | `tally inspect <csv>` | Show CSV structure to build format string |
 | `tally diag` | Debug config issues |
@@ -69,6 +70,33 @@ tally run --format json --category Food           # Just Food category
 tally explain --classification monthly            # Explain all monthly merchants
 tally explain --category Subscriptions            # Explain all subscriptions
 ```
+
+### Explain Command Enhancements
+
+The `explain` command now provides more detailed information:
+
+**Show raw description variations:**
+```bash
+tally explain Netflix
+# Shows all raw description variations that matched:
+#   Raw descriptions (3 variations):
+#     • NETFLIX.COM
+#     • NETFLIX*STREAMING
+#     • NETFLIX MONTHLY
+```
+
+**Explain specific transactions:**
+```bash
+tally explain "STARBUCKS STORE 123" --date 2025-01-15
+# Shows:
+#   - Raw description
+#   - Detected merchant and location
+#   - Category and subcategory
+#   - Which rule matched
+#   - Travel flag
+```
+
+This helps debug categorization and identify when multiple services are grouped under one merchant.
 
 ## Configuration
 

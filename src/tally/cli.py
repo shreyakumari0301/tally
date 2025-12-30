@@ -1493,9 +1493,38 @@ def cmd_explain(args):
             all_merchants[name] = data
 
     verbose = args.verbose
+    filter_date = args.date if hasattr(args, 'date') else None
 
     # Handle output based on what was requested
-    if merchant_names:
+    if merchant_names and filter_date:
+        # Explain specific transaction(s) by raw description + date
+        from datetime import datetime as dt
+        try:
+            filter_dt = dt.strptime(filter_date, '%Y-%m-%d').date()
+        except ValueError:
+            print(f"Error: Invalid date format '{filter_date}'. Use YYYY-MM-DD", file=sys.stderr)
+            sys.exit(1)
+        
+        search_term = ' '.join(merchant_names).upper()
+        
+        # Find matching transactions
+        matching_txns = []
+        for txn in all_txns:
+            raw_desc = txn.get('raw_description', '').upper()
+            txn_date = txn['date'].date()
+            
+            if search_term in raw_desc and txn_date == filter_dt:
+                matching_txns.append(txn)
+        
+        if not matching_txns:
+            print(f"No transactions found matching '{search_term}' on {filter_date}", file=sys.stderr)
+            sys.exit(1)
+        
+        # Explain each matching transaction
+        for txn in matching_txns:
+            _print_transaction_explanation(txn, rules, args.format, verbose)
+    
+    elif merchant_names:
         # Explain specific merchants
         found_any = False
         for merchant_query in merchant_names:
@@ -1612,13 +1641,104 @@ def cmd_explain(args):
         _print_explain_summary(stats, verbose)
 
 
+def _print_transaction_explanation(txn, rules, output_format, verbose):
+    """Print explanation for a specific transaction."""
+    import json
+    from .merchant_utils import normalize_merchant
+    
+    raw_desc = txn.get('raw_description', txn.get('description', ''))
+    
+    if output_format == 'json':
+        explanation = {
+            'date': txn['date'].strftime('%Y-%m-%d'),
+            'raw_description': raw_desc,
+            'merchant': txn['merchant'],
+            'amount': txn['amount'],
+            'category': txn['category'],
+            'subcategory': txn['subcategory'],
+            'location': txn.get('location'),
+            'is_travel': txn.get('is_travel', False),
+            'source': txn['source']
+        }
+        
+        # Add match info if available
+        if txn.get('match_info'):
+            explanation['match_info'] = txn['match_info']
+        
+        print(json.dumps(explanation, indent=2))
+    
+    elif output_format == 'markdown':
+        print(f"## Transaction: {raw_desc}")
+        print(f"**Date:** {txn['date'].strftime('%Y-%m-%d')}")
+        print(f"**Amount:** ${txn['amount']:.2f}")
+        print(f"**Merchant:** {txn['merchant']}")
+        print(f"**Category:** {txn['category']} > {txn['subcategory']}")
+        print(f"**Location:** {txn.get('location', 'N/A')}")
+        print(f"**Travel:** {'Yes' if txn.get('is_travel') else 'No'}")
+        print(f"**Source:** {txn['source']}")
+        
+        # Show how it was categorized
+        match_info = txn.get('match_info')
+        if match_info:
+            pattern = match_info.get('pattern', '')
+            source = match_info.get('source', 'unknown')
+            print(f"\n**Matched Pattern:** `{pattern}` ({source})")
+        else:
+            print(f"\n**Matched Pattern:** None (using default category)")
+        
+        if verbose >= 1:
+            # Show normalization process
+            merchant, category, subcategory, mi = normalize_merchant(raw_desc, rules)
+            print(f"\n**Normalization:**")
+            print(f"  Raw: `{raw_desc}`")
+            print(f"  Normalized: `{merchant}`")
+            print(f"  Detected Category: {category} > {subcategory}")
+        
+        print()
+    
+    else:
+        # Text format
+        print(f"Transaction: {raw_desc}")
+        print(f"  Date: {txn['date'].strftime('%Y-%m-%d')}")
+        print(f"  Amount: ${txn['amount']:.2f}")
+        print(f"  Merchant: {txn['merchant']}")
+        print(f"  Category: {txn['category']} > {txn['subcategory']}")
+        print(f"  Location: {txn.get('location', 'N/A')}")
+        print(f"  Travel: {'Yes' if txn.get('is_travel') else 'No'}")
+        print(f"  Source: {txn['source']}")
+        
+        # Show how it was categorized
+        match_info = txn.get('match_info')
+        if match_info:
+            pattern = match_info.get('pattern', '')
+            source = match_info.get('source', 'unknown')
+            print(f"\n  Rule: {pattern} ({source})")
+        else:
+            print(f"\n  Rule: None (default category)")
+        
+        if verbose >= 1:
+            # Show normalization process
+            merchant, category, subcategory, mi = normalize_merchant(raw_desc, rules)
+            print(f"\n  Normalization:")
+            print(f"    Raw: {raw_desc}")
+            print(f"    Normalized: {merchant}")
+            print(f"    Detected: {category} > {subcategory}")
+        
+        print()
+
+
 def _print_merchant_explanation(name, data, output_format, verbose, num_months):
     """Print explanation for a single merchant."""
     import json
     from .analyzer import build_merchant_json
 
     if output_format == 'json':
-        print(json.dumps(build_merchant_json(name, data, verbose), indent=2))
+        merchant_json = build_merchant_json(name, data, verbose)
+        # Add raw descriptions to JSON output
+        raw_descs = data.get('raw_descriptions', set())
+        if raw_descs:
+            merchant_json['raw_descriptions'] = sorted(raw_descs)
+        print(json.dumps(merchant_json, indent=2))
     elif output_format == 'markdown':
         reasoning = data.get('reasoning', {})
         print(f"## {name}")
@@ -1628,6 +1748,13 @@ def _print_merchant_explanation(name, data, output_format, verbose, num_months):
         print(f"**Monthly Value:** ${data.get('monthly_value', 0):.2f}")
         print(f"**YTD Total:** ${data.get('total', 0):.2f}")
         print(f"**Months Active:** {data.get('months_active', 0)}/{num_months}")
+
+        # Show raw description variations
+        raw_descs = data.get('raw_descriptions', set())
+        if raw_descs:
+            print(f"\n**Raw Description Variations ({len(raw_descs)}):**")
+            for desc in sorted(raw_descs):
+                print(f"  - `{desc}`")
 
         if verbose >= 1:
             trace = reasoning.get('trace', [])
@@ -1658,6 +1785,15 @@ def _print_merchant_explanation(name, data, output_format, verbose, num_months):
         reasoning = data.get('reasoning', {})
         print(f"{name} -> {classification}")
         print(f"  {reasoning.get('decision', 'N/A')}")
+
+        # Show raw description variations
+        raw_descs = data.get('raw_descriptions', set())
+        if raw_descs:
+            print(f"\n  Raw descriptions ({len(raw_descs)} variations):")
+            for desc in sorted(raw_descs)[:5]:  # Show first 5
+                print(f"    • {desc}")
+            if len(raw_descs) > 5:
+                print(f"    ... and {len(raw_descs) - 5} more")
 
         # Show tags
         tags = data.get('tags', [])
@@ -1927,13 +2063,13 @@ def main():
     explain_parser = subparsers.add_parser(
         'explain',
         help='Explain why merchants are classified the way they are',
-        description='Show classification reasoning for merchants. '
+        description='Show classification reasoning for merchants or specific transactions. '
                     'Runs analysis on-the-fly and explains the decision process.'
     )
     explain_parser.add_argument(
         'merchant',
         nargs='*',
-        help='Merchant name(s) to explain (optional, shows summary if omitted)'
+        help='Merchant name(s) or raw description to explain (optional, shows summary if omitted)'
     )
     explain_parser.add_argument(
         'config',
@@ -1944,6 +2080,10 @@ def main():
         '--settings', '-s',
         default='settings.yaml',
         help='Settings file name (default: settings.yaml)'
+    )
+    explain_parser.add_argument(
+        '--date', '-d',
+        help='Filter to specific transaction date (YYYY-MM-DD) - for explaining specific transactions'
     )
     explain_parser.add_argument(
         '--format', '-f',

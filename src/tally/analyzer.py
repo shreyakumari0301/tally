@@ -687,6 +687,7 @@ def analyze_transactions(transactions):
         'payments': [],  # All individual payment amounts
         'transactions': [],  # Individual transactions for drill-down
         'tags': set(),  # Collect all tags from matching rules
+        'raw_descriptions': set(),  # Track all raw description variations
     })
     by_month = defaultdict(float)
 
@@ -724,6 +725,9 @@ def analyze_transactions(transactions):
             by_merchant[txn['merchant']]['match_info'] = txn['match_info']
         # Collect tags from all transactions
         by_merchant[txn['merchant']]['tags'].update(txn.get('tags', []))
+        # Track raw description variations
+        if txn.get('raw_description'):
+            by_merchant[txn['merchant']]['raw_descriptions'].add(txn['raw_description'])
 
         by_month[month_key] += txn['amount']
 
