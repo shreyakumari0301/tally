@@ -200,50 +200,6 @@ Pattern,Merchant,Category,Subcategory
 
 '''
 
-STARTER_AGENTS_MD = '''# Tally - Budget Analyzer
-
-Run `tally workflow` to see context-aware instructions for your current state.
-
-## Quick Start
-
-```bash
-tally workflow    # See what to do next based on current state
-tally --help      # See all available commands
-```
-
-## Key Files
-
-- `config/settings.yaml` - Data sources configuration
-- `config/merchant_categories.csv` - Pattern matching rules (main file to edit)
-- `data/` - Your bank/credit card statement files
-- `output/` - Generated reports
-'''
-
-STARTER_CLAUDE_MD = '''# CLAUDE.md - Tally Budget Analyzer
-
-Run `tally workflow` to see context-aware instructions for your current state.
-
-## Quick Start
-
-```bash
-tally workflow    # See what to do next based on current state
-tally --help      # See all available commands
-```
-
-## Key Files
-
-- `config/settings.yaml` - Data sources configuration
-- `config/merchant_categories.csv` - Pattern matching rules (main file to edit)
-- `data/` - Your bank/credit card statement files (contains PII - do not commit)
-- `output/` - Generated reports
-
-## Important
-
-- Statement files in `data/` contain PII - never commit or display raw contents
-- Run `tally workflow` to see the categorization workflow and next steps
-'''
-
-
 def find_config_dir():
     """Find the config directory, checking environment and both layouts.
 
@@ -433,45 +389,6 @@ output/
 ''')
         files_created.append('.gitignore')
 
-    # Create README
-    readme_path = os.path.join(target_dir, 'README.md')
-    if not os.path.exists(readme_path):
-        with open(readme_path, 'w', encoding='utf-8') as f:
-            f.write(f'''# My Budget Analysis
-
-Budget analysis for {current_year}.
-
-## Setup
-
-1. Export your bank/credit card statements to `data/`
-2. Update `config/settings.yaml` with your data sources
-3. Add merchant rules to `config/merchant_categories.csv`
-4. Run: `tally ./config`
-
-## Documentation
-
-Run `tally --help-config` for detailed configuration guide.
-''')
-        files_created.append('README.md')
-
-    # Create AGENTS.md for AI agent instructions
-    agents_path = os.path.join(target_dir, 'AGENTS.md')
-    if not os.path.exists(agents_path):
-        with open(agents_path, 'w', encoding='utf-8') as f:
-            f.write(STARTER_AGENTS_MD)
-        files_created.append('AGENTS.md')
-    else:
-        files_skipped.append('AGENTS.md')
-
-    # Create CLAUDE.md for Claude Code specific instructions
-    claude_path = os.path.join(target_dir, 'CLAUDE.md')
-    if not os.path.exists(claude_path):
-        with open(claude_path, 'w', encoding='utf-8') as f:
-            f.write(STARTER_CLAUDE_MD)
-        files_created.append('CLAUDE.md')
-    else:
-        files_skipped.append('CLAUDE.md')
-
     return files_created, files_skipped
 
 
@@ -517,59 +434,9 @@ def cmd_init(args):
         except Exception:
             pass
 
-    # Show appropriate next steps
-    if not created:
-        # Already initialized
-        if has_data_sources:
-            print(f"""
-{C.GREEN}✓ Already set up.{C.RESET} Run {C.CYAN}tally workflow{C.RESET} to see next steps.
-""")
-        else:
-            print(f"""
-{C.GREEN}✓ Config exists.{C.RESET} Run {C.CYAN}tally workflow{C.RESET} to see next steps.
-""")
-    else:
-        # Helper for clickable links (OSC 8 hyperlinks, with fallback)
-        def link(url, text=None):
-            text = text or url
-            if _supports_color():
-                return f"\033]8;;{url}\033\\{C.UNDERLINE}{C.BLUE}{text}{C.RESET}\033]8;;\033\\"
-            return url
-
-        # Check which agents are installed
-        agents = [
-            ('claude', 'Claude Code', 'https://claude.com/product/claude-code'),
-            ('copilot', 'GitHub Copilot', 'https://docs.github.com/en/copilot/how-tos/set-up/install-copilot-cli'),
-            ('opencode', 'OpenCode', 'https://opencode.ai'),
-            ('codex', 'OpenAI Codex', 'https://developers.openai.com/codex/cli'),
-        ]
-
-        agent_lines = []
-        for cmd, name, url in agents:
-            installed = shutil.which(cmd) is not None
-            if installed:
-                status = f"{C.GREEN}✓ installed{C.RESET}"
-            else:
-                status = link(url)
-            agent_lines.append(f"     {C.CYAN}{cmd:<11}{C.RESET} {name:<16} {status}")
-
-        agents_block = '\n'.join(agent_lines)
-
-        print(f"""
-{C.BOLD}Next steps:{C.RESET}
-
-  {C.BOLD}1.{C.RESET} Drop your bank/credit card exports into {C.CYAN}{rel_data}{C.RESET}
-
-  {C.BOLD}2.{C.RESET} Configure your data sources in {C.CYAN}{rel_settings}{C.RESET}
-
-  {C.BOLD}3.{C.RESET} Open this folder in an AI agent:
-{agents_block}
-     {C.DIM}Or any agent that can run command-line tools.{C.RESET}
-
-  {C.BOLD}4.{C.RESET} Run {C.GREEN}tally workflow{C.RESET} to see next steps
-
-{C.DIM}The agent can run tally workflow at any time to see context-aware instructions.{C.RESET}
-""")
+    # Show next step
+    print()
+    print(f"Run {C.GREEN}tally workflow{C.RESET} to see next steps.")
 
 
 def cmd_run(args):
@@ -1484,26 +1351,17 @@ def cmd_update(args):
         if new_config and new_config != old_config:
             did_migrate = True
 
-    # Handle --assets flag (update AGENTS.md and CLAUDE.md)
-    if args.assets:
-        update_assets(args.yes)
-
     # Skip binary update if no update available
     if not has_update:
-        if not args.assets and not did_migrate:
+        if not did_migrate:
             print("\nNothing to update.")
         sys.exit(0)
 
     # Check if running from source (can't self-update)
     import sys as _sys
     if not getattr(_sys, 'frozen', False):
-        if args.assets:
-            # Already updated assets, just note that binary update isn't possible from source
-            print("\nNote: Binary self-update not available when running from source.")
-        else:
-            print(f"\n✗ Cannot self-update when running from source. Use: uv tool upgrade tally")
-            sys.exit(1)
-        sys.exit(0)
+        print(f"\n✗ Cannot self-update when running from source. Use: uv tool upgrade tally")
+        sys.exit(1)
 
     # Perform binary update
     print()
@@ -1512,39 +1370,9 @@ def cmd_update(args):
     if success:
         print(f"\n✓ {message}")
         print("\nRestart tally to use the new version.")
-        print("\nTip: Run 'tally update --assets' to get the latest AGENTS.md and CLAUDE.md")
     else:
         print(f"\n✗ {message}")
         sys.exit(1)
-
-
-def update_assets(skip_confirm: bool = False):
-    """Update AGENTS.md and CLAUDE.md in current directory."""
-    from pathlib import Path
-
-    target_dir = Path.cwd()
-    assets = [
-        ('AGENTS.md', STARTER_AGENTS_MD),
-        ('CLAUDE.md', STARTER_CLAUDE_MD),
-    ]
-
-    print("\nUpdating assets in current directory...")
-
-    for filename, content in assets:
-        path = target_dir / filename
-        if path.exists() and not skip_confirm:
-            print(f"\nWarning: {filename} exists and will be overwritten.")
-            try:
-                confirm = input("Continue? [y/N]: ").strip().lower()
-            except (EOFError, KeyboardInterrupt):
-                print("\nCancelled.")
-                return
-            if confirm != 'y':
-                print(f"Skipping {filename}")
-                continue
-
-        path.write_text(content, encoding='utf-8')
-        print(f"✓ Updated {filename}")
 
 
 def cmd_explain(args):
@@ -2142,14 +1970,9 @@ def main():
         help='Check for updates without installing'
     )
     update_parser.add_argument(
-        '--assets',
-        action='store_true',
-        help='Update AGENTS.md and CLAUDE.md in current directory (will prompt before overwriting)'
-    )
-    update_parser.add_argument(
         '-y', '--yes',
         action='store_true',
-        help='Skip confirmation prompts for asset updates'
+        help='Skip confirmation prompts'
     )
     update_parser.add_argument(
         '--prerelease',
