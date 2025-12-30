@@ -1158,6 +1158,30 @@ def print_summary(stats, year=2025, filter_category=None, currency_format="${amo
     print(f"TOTAL SPENDING (YTD):        {fmt(actual_spending):>14}")
 
     # =========================================================================
+    # CATEGORY BREAKDOWN
+    # =========================================================================
+    print("\n" + "=" * 80)
+    print("SPENDING BY CATEGORY")
+    print("=" * 80)
+    
+    # Group by category
+    category_totals = {}
+    for (cat, subcat), data in by_category.items():
+        if cat not in excluded_categories:
+            category_totals[cat] = category_totals.get(cat, 0) + data['total']
+    
+    # Sort by total
+    sorted_cats = sorted(category_totals.items(), key=lambda x: x[1], reverse=True)
+    
+    print(f"\n{'Category':<20} {'Total':>12} {'% of Total':>10}")
+    print("-" * 50)
+    for cat, total in sorted_cats:
+        pct = (total / actual_spending * 100) if actual_spending > 0 else 0
+        print(f"{cat:<20} {fmt(total):>14} {pct:>9.1f}%")
+    print("-" * 50)
+    print(f"{'Total':<20} {fmt(actual_spending):>14} {'100.0%':>10}")
+
+    # =========================================================================
     # MONTHLY RECURRING (6+ months)
     # =========================================================================
     print("\n" + "=" * 80)
@@ -2011,6 +2035,130 @@ def write_summary_file(stats, filepath, year=2025, home_locations=None, currency
                 <div class="chart-wrapper">
                     <canvas id="categoryByMonthChart"></canvas>
                 </div>
+            </div>
+            </div>
+        </section>
+
+        <section class="category-view-section">
+            <div class="section-header" onclick="toggleSection(this)" data-tooltip="View spending organized by category instead of classification">
+                <h2><span class="toggle">▼</span> Category View</h2>
+                <span class="section-total">{fmt(actual)}</span>
+            </div>
+            <div class="section-content">
+            <div class="table-wrapper">'''
+    
+    # Build category-organized data
+    category_data = defaultdict(lambda: {
+        'total': 0,
+        'count': 0,
+        'merchants': defaultdict(lambda: {
+            'total': 0,
+            'count': 0,
+            'transactions': [],
+            'classification': '',
+            'subcategory': ''
+        })
+    })
+    
+    # Organize all merchants by category
+    all_merchant_dicts = [
+        ('monthly', monthly_merchants),
+        ('annual', annual_merchants),
+        ('periodic', periodic_merchants),
+        ('travel', travel_merchants),
+        ('one_off', one_off_merchants),
+        ('variable', variable_merchants)
+    ]
+    
+    for classification, merchant_dict in all_merchant_dicts:
+        for merchant_name, data in merchant_dict.items():
+            cat = data.get('category', 'Other')
+            subcat = data.get('subcategory', '')
+            
+            category_data[cat]['total'] += data['total']
+            category_data[cat]['count'] += data['count']
+            category_data[cat]['merchants'][merchant_name] = {
+                'total': data['total'],
+                'count': data['count'],
+                'transactions': data.get('transactions', []),
+                'classification': classification,
+                'subcategory': subcat,
+                'months_active': data.get('months_active', 0)
+            }
+    
+    # Sort categories by total
+    sorted_categories = sorted(category_data.items(), key=lambda x: x[1]['total'], reverse=True)
+    
+    # Generate HTML for each category
+    for category, cat_data in sorted_categories:
+        if category in excluded:
+            continue
+            
+        pct = (cat_data['total'] / actual * 100) if actual > 0 else 0
+        category_id = make_category_id(category)
+        
+        html += f'''
+            <div class="category-group" data-category-id="{category_id}">
+                <div class="category-header" onclick="toggleCategoryGroup(this)">
+                    <h3><span class="toggle">▶</span> <span class="clickable" onclick="addFilterFromCell(event, this, 'category')">{category}</span></h3>
+                    <span class="category-total">{fmt(cat_data['total'])} <span class="category-pct">({pct:.1f}%)</span></span>
+                </div>
+                <div class="category-merchants hidden">
+                <table class="category-table">
+                    <thead>
+                        <tr>
+                            <th>Merchant</th>
+                            <th>Subcategory</th>
+                            <th>Classification</th>
+                            <th>Count</th>
+                            <th>Total</th>
+                            <th>%</th>
+                        </tr>
+                    </thead>
+                    <tbody>'''
+        
+        # Sort merchants within category by total
+        sorted_merchants = sorted(cat_data['merchants'].items(), key=lambda x: x[1]['total'], reverse=True)
+        
+        for merchant_name, merch_data in sorted_merchants:
+            merchant_id = make_merchant_id(merchant_name)
+            merch_pct = (merch_data['total'] / cat_data['total'] * 100) if cat_data['total'] > 0 else 0
+            classification_badge = f'<span class="badge {merch_data["classification"]}">{merch_data["classification"]}</span>'
+            cat_data_str = f"{category}/{merch_data['subcategory']}".lower()
+            
+            html += f'''
+                        <tr class="merchant-row" data-merchant="{merchant_id}" data-category="{cat_data_str}" data-category-id="{category_id}" data-ytd="{merch_data['total']:.2f}" onclick="toggleTransactions(this)">
+                            <td class="merchant"><span class="chevron clickable" onclick="toggleTransactionsFromChevron(event, this)">▶</span> <span class="clickable" onclick="addFilterFromCell(event, this, 'merchant')">{merchant_name}</span></td>
+                            <td>{merch_data['subcategory']}</td>
+                            <td>{classification_badge}</td>
+                            <td>{merch_data['count']}</td>
+                            <td class="money">{fmt(merch_data['total'])}</td>
+                            <td class="pct">{merch_pct:.1f}%</td>
+                        </tr>'''
+            
+            # Add transaction detail rows (hidden by default)
+            sorted_txns = sorted(merch_data.get('transactions', []), key=lambda x: x['date'], reverse=True)
+            for txn in sorted_txns:
+                html += f'''
+                        <tr class="txn-row hidden" data-merchant="{merchant_id}" data-amount="{txn['amount']:.2f}" data-month="{txn['month']}" data-category="{cat_data_str}" data-category-id="{category_id}">
+                            <td colspan="6"><div class="txn-detail"><span class="txn-date">{txn['date']}</span><span class="txn-desc">{txn['description']}</span><span class="txn-amount">{fmt_dec(txn['amount'])}</span><span class="txn-source {txn['source'].lower()}">{txn['source']}</span>{location_badge(txn.get('location'))}</div></td>
+                        </tr>'''
+        
+        html += f'''
+                        <tr class="category-total-row">
+                            <td>Category Total</td>
+                            <td></td>
+                            <td></td>
+                            <td>{cat_data['count']}</td>
+                            <td class="money">{fmt(cat_data['total'])}</td>
+                            <td></td>
+                        </tr>
+                    </tbody>
+                </table>
+                </div>
+            </div>'''
+    
+    html += '''
             </div>
             </div>
         </section>

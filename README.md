@@ -70,6 +70,30 @@ tally explain --classification monthly            # Explain all monthly merchant
 tally explain --category Subscriptions            # Explain all subscriptions
 ```
 
+### Category View
+
+The HTML report includes a **Category View** section that organizes spending by category instead of by classification (monthly, annual, etc.). This provides an alternative perspective on your spending:
+
+- **Grouping**: All transactions grouped by category (Food, Shopping, Bills, etc.)
+- **Merchants**: See all merchants within each category, regardless of classification
+- **Details**: Click to expand categories and see individual merchants and transactions
+- **Percentages**: Shows what percentage of total spending each category represents
+
+The category breakdown also appears in the text summary when running `tally run --summary`.
+
+**Example Output:**
+```
+SPENDING BY CATEGORY
+==================
+Category              Total      % of Total
+--------------------------------------------------
+Food               $2,450.00       35.2%
+Shopping           $1,820.00       26.1%
+Bills              $1,200.00       17.2%
+Transport            $890.00       12.8%
+...
+```
+
 ## Configuration
 
 ### settings.yaml

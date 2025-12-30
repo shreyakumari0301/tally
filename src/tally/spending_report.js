@@ -392,6 +392,19 @@ createApp({
             }
         }
 
+        function toggleCategoryGroup(element) {
+            const merchantsDiv = element.nextElementSibling;
+            const toggle = element.querySelector('.toggle');
+            
+            if (merchantsDiv.classList.contains('hidden')) {
+                merchantsDiv.classList.remove('hidden');
+                toggle.textContent = '▼';
+            } else {
+                merchantsDiv.classList.add('hidden');
+                toggle.textContent = '▶';
+            }
+        }
+
         function toggleSection(sectionId) {
             if (collapsedSections.has(sectionId)) {
                 collapsedSections.delete(sectionId);
