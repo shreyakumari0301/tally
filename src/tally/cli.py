@@ -1412,18 +1412,24 @@ def cmd_workflow(args):
     for cmd, desc in cmds:
         print(f"    {C.GREEN}{cmd:<24}{C.RESET} {C.DIM}{desc}{C.RESET}")
 
-    section("Pattern Syntax")
-    print(f"    {C.DIM}Patterns are Python regex, case-insensitive{C.RESET}")
+    section("CSV Format")
+    print(f"    {C.DIM}Pattern,Merchant,Category,Subcategory,Tags{C.RESET}")
+    print()
+    print(f"    {C.BOLD}Pattern{C.RESET}      Python regex, case-insensitive")
+    print(f"    {C.BOLD}Tags{C.RESET}         Optional, pipe-separated: {C.DIM}business|reimbursable{C.RESET}")
+    print()
+    print(f"    {C.DIM}Examples:{C.RESET}")
     patterns = [
         ("STARBUCKS", "contains STARBUCKS"),
         ("UBER|LYFT", "either UBER or LYFT"),
         ("UBER\\s(?!EATS)", "UBER but not UBER EATS"),
+        ("COSTCO[amount>200]", "Costco orders over $200"),
     ]
     for pattern, desc in patterns:
-        print(f"    {C.CYAN}{pattern:<20}{C.RESET} {C.DIM}{desc}{C.RESET}")
+        print(f"      {C.CYAN}{pattern:<22}{C.RESET} {C.DIM}{desc}{C.RESET}")
 
     print()
-    print(f"  {C.DIM}Tip: First match wins — put specific patterns before general ones{C.RESET}")
+    print(f"  {C.DIM}First match wins — put specific patterns before general ones{C.RESET}")
     print()
 
 
