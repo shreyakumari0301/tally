@@ -64,15 +64,32 @@ data_sources:
     file: data/transactions.csv
     format: "{date:%m/%d/%Y},{description},{amount}"
 
+merchants_file: config/merchants.merchants
 sections_file: config/sections.sections
 EOF
 
-cat > config/merchant_categories.csv << 'EOF'
-Pattern,Merchant,Category,Subcategory
-NETFLIX,Netflix,Subscriptions,Streaming
-SPOTIFY,Spotify,Subscriptions,Streaming
-AMAZON,Amazon,Shopping,Online
-STARBUCKS,Starbucks,Food,Coffee
+cat > config/merchants.merchants << 'EOF'
+# Tally Merchant Rules
+
+[Netflix]
+match: contains("NETFLIX")
+category: Subscriptions
+subcategory: Streaming
+
+[Spotify]
+match: contains("SPOTIFY")
+category: Subscriptions
+subcategory: Streaming
+
+[Amazon]
+match: contains("AMAZON")
+category: Shopping
+subcategory: Online
+
+[Starbucks]
+match: contains("STARBUCKS")
+category: Food
+subcategory: Coffee
 EOF
 
 cat > config/sections.sections << 'EOF'
@@ -112,7 +129,13 @@ fi
 # Test 6: Add rule for unknown merchant
 echo ""
 echo "=== Test 6: Add rule and verify ==="
-echo "UNKNOWN MERCHANT,Unknown Merchant,Shopping,Other" >> config/merchant_categories.csv
+cat >> config/merchants.merchants << 'EOF'
+
+[Unknown Merchant]
+match: contains("UNKNOWN MERCHANT")
+category: Shopping
+subcategory: Other
+EOF
 OUTPUT=$(tally discover)
 echo "$OUTPUT"
 if echo "$OUTPUT" | grep -qi "no unknown\|all merchants are categorized"; then

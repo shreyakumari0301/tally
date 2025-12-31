@@ -135,28 +135,98 @@ Run `tally inspect <file>` to see suggested account type based on your data.
     description: "{vendor} ({txn_type})"  # Combines into "STORE NAME (Card payment)"
 ```
 
-### merchant_categories.csv
+### Merchant Rules
+
+#### merchants.merchants (Recommended)
+
+Expression-based rules with full power:
+
+```yaml
+# settings.yaml
+merchants_file: config/merchants.merchants
+```
+
+```python
+# config/merchants.merchants
+
+# Variables for reuse
+is_large = amount > 200
+is_holiday = month >= 11 and month <= 12
+
+[Netflix]
+match: contains("NETFLIX")
+category: Subscriptions
+subcategory: Streaming
+tags: entertainment, recurring
+
+[Uber Rides]
+match: regex("UBER(?!.*EATS)")
+category: Transportation
+subcategory: Rideshare
+
+[Uber Eats]
+match: contains("UBER") and contains("EATS")
+category: Food
+subcategory: Delivery
+
+[Costco Grocery]
+match: contains("COSTCO") and amount <= 200
+category: Food
+subcategory: Grocery
+
+[Costco Bulk]
+match: contains("COSTCO") and is_large
+category: Shopping
+subcategory: Wholesale
+
+[Holiday Gift]
+match: contains("AMAZON") and is_holiday and amount > 100
+category: Shopping
+subcategory: Gifts
+tags: holiday
+```
+
+**Match expressions:**
+| Function | Description |
+|----------|-------------|
+| `contains("X")` | Case-insensitive substring match |
+| `regex("pattern")` | Regex pattern match |
+| `amount > 100` | Amount conditions |
+| `month == 12` | Date component (month, year, day) |
+| `date >= "2025-11-28"` | Date range |
+
+**Two-pass evaluation:**
+1. **Categorization**: First matching rule with `category:` wins
+2. **Tagging**: ALL matching rules contribute their tags (additive)
+
+This allows tag-only rules that apply across categories:
+```python
+[Large Purchase]
+match: amount > 500
+tags: large
+
+[Holiday Season]
+match: month >= 11 and month <= 12
+tags: holiday
+```
+
+#### merchant_categories.csv (Deprecated)
+
+Legacy CSV format still works but will show a migration prompt:
 
 ```csv
 Pattern,Merchant,Category,Subcategory,Tags
 WHOLEFDS,Whole Foods,Food,Grocery,
-UBER\s(?!EATS),Uber,Transport,Rideshare,business|reimbursable
-UBER\s*EATS,Uber Eats,Food,Delivery,
 NETFLIX,Netflix,Subscriptions,Streaming,entertainment|recurring
-GITHUB,GitHub,Subscriptions,Software,business|recurring
 COSTCO[amount>200],Costco Bulk,Shopping,Bulk,
 ```
 
-Patterns are Python regex (case-insensitive). First match wins.
+Run `tally run` to migrate to the new format.
 
 **Tags** are optional, pipe-separated labels for filtering:
 - Use cases: `business`, `reimbursable`, `entertainment`, `recurring`, `tax-deductible`
 - Filter in UI: Click tag badges or type `t:business` in search
 - Filter in CLI: `tally explain --tags business,reimbursable`
-
-**Inline modifiers** target specific transactions:
-- `[amount>200]`, `[amount:50-100]` - Amount conditions
-- `[date=2025-01-15]`, `[month=12]` - Date conditions
 
 ### sections.sections (Optional)
 

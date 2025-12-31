@@ -84,7 +84,7 @@ from ._version import (
 from .config_loader import load_config
 
 BANNER = ''
-from .merchant_utils import get_all_rules, diagnose_rules, explain_description
+from .merchant_utils import get_all_rules, diagnose_rules, explain_description, load_merchant_rules
 from .analyzer import (
     parse_amex,
     parse_boa,
@@ -96,6 +96,114 @@ from .analyzer import (
     write_summary_file,
     write_summary_file_vue,
 )
+
+
+def _check_merchant_migration(config: dict, config_dir: str, quiet: bool = False, migrate: bool = False) -> list:
+    """
+    Check if merchant rules should be migrated from CSV to .merchants format.
+
+    Args:
+        config: Loaded config dict with _merchants_file and _merchants_format
+        config_dir: Path to config directory
+        quiet: Suppress output
+        migrate: Force migration without prompting (for non-interactive use)
+
+    Returns:
+        List of merchant rules (in the format expected by existing code)
+    """
+    merchants_file = config.get('_merchants_file')
+    merchants_format = config.get('_merchants_format')
+
+    if not merchants_file:
+        # No rules file found
+        if not quiet:
+            print(f"No merchant rules found - transactions will be categorized as Unknown")
+        return get_all_rules()
+
+    if merchants_format == 'csv':
+        # CSV format - show deprecation warning and offer migration
+        csv_rules = load_merchant_rules(merchants_file)
+
+        # Determine if we should migrate
+        should_migrate = migrate  # --migrate flag forces it
+        is_interactive = sys.stdout.isatty() and not migrate
+
+        if not quiet:
+            print()
+            print(f"{C.YELLOW}⚠️  Deprecation Notice:{C.RESET}")
+            print(f"   {C.DIM}merchant_categories.csv is deprecated.{C.RESET}")
+            print(f"   {C.DIM}The new .merchants format supports expression-based rules like:{C.RESET}")
+            print(f"   {C.DIM}  match: contains(\"COSTCO\") and amount > 200{C.RESET}")
+            print()
+
+        if is_interactive:
+            # Only prompt if interactive and not using --migrate
+            try:
+                response = input(f"   Migrate to new format? [y/N] ").strip().lower()
+                should_migrate = (response == 'y')
+            except (EOFError, KeyboardInterrupt):
+                should_migrate = False
+
+            if not should_migrate:
+                print(f"   {C.DIM}Continuing with CSV format (migration skipped){C.RESET}")
+                print()
+        elif not migrate and not quiet:
+            # Non-interactive without --migrate flag
+            print(f"   {C.DIM}Use --migrate flag to convert to new format{C.RESET}")
+            print()
+
+        if should_migrate:
+            # Perform migration
+            from .merchant_engine import csv_to_merchants_content
+
+            # Generate .merchants content
+            content = csv_to_merchants_content(csv_rules)
+
+            # Write new file next to settings.yaml
+            new_file = os.path.join(config_dir, 'merchants.merchants')
+            try:
+                with open(new_file, 'w', encoding='utf-8') as f:
+                    f.write(content)
+                print(f"{C.GREEN}✓ Created {new_file}{C.RESET}")
+                print()
+                print(f"   {C.DIM}Add to settings.yaml:{C.RESET}")
+                print(f"   {C.CYAN}merchants_file: config/merchants.merchants{C.RESET}")
+                print()
+                print(f"   {C.DIM}Then you can delete merchant_categories.csv{C.RESET}")
+                print()
+            except IOError as e:
+                print(f"{C.YELLOW}   Could not write file: {e}{C.RESET}", file=sys.stderr)
+                print(f"   {C.DIM}Continuing with CSV format...{C.RESET}")
+
+        # Continue with CSV format for this run (backwards compatible)
+        if not quiet:
+            print(f"Loaded {len(csv_rules)} categorization rules from {merchants_file}")
+            if len(csv_rules) == 0:
+                print()
+                print("⚠️  No merchant rules defined - all transactions will be 'Unknown'")
+                print("    Run 'tally discover' to find unknown merchants and get suggested rules.")
+                print("    Tip: Use an AI agent with 'tally discover' to auto-generate rules!")
+                print()
+
+        return get_all_rules(merchants_file)
+
+    # New .merchants format
+    if merchants_format == 'new':
+        rules = get_all_rules(merchants_file)
+        if not quiet:
+            print(f"Loaded {len(rules)} categorization rules from {merchants_file}")
+            if len(rules) == 0:
+                print()
+                print("⚠️  No merchant rules defined - all transactions will be 'Unknown'")
+                print("    Run 'tally discover' to find unknown merchants and get suggested rules.")
+                print("    Tip: Use an AI agent with 'tally discover' to auto-generate rules!")
+                print()
+        return rules
+
+    # No rules file found
+    if not quiet:
+        print(f"No merchant rules found - transactions will be categorized as Unknown")
+    return get_all_rules()
 
 
 CONFIG_HELP = '''
@@ -114,20 +222,22 @@ DIRECTORY STRUCTURE
 my-budget/
 ├── config/
 │   ├── settings.yaml           # Data sources & settings
-│   └── merchant_categories.csv # Custom category overrides (optional)
+│   └── merchants.merchants     # Merchant categorization rules
 ├── data/                       # Your statement exports
 └── output/                     # Generated reports
 
 SETTINGS.YAML
 -------------
 year: 2025
+merchants_file: config/merchants.merchants
 data_sources:
   - name: AMEX
     file: data/amex.csv
-    type: amex                  # or "boa" for Bank of America
-  # Custom CSV format:
+    account_type: credit_card
+    format: "{date:%m/%d/%Y},{description},{amount}"
   - name: Chase
     file: data/chase.csv
+    account_type: credit_card
     format: "{date:%m/%d/%Y},{description},{amount}"
 output_dir: output
 
@@ -156,19 +266,26 @@ Use the discover command to find uncategorized transactions:
   tally discover --format csv  # CSV output to copy-paste
   tally discover --format json # JSON for programmatic use
 
-MERCHANT RULES
---------------
-Define merchant patterns in merchant_categories.csv:
+MERCHANT RULES (.merchants format)
+----------------------------------
+Define merchant patterns in config/merchants.merchants:
 
-Pattern,Merchant,Category,Subcategory
-MY LOCAL CAFE,Local Cafe,Food,Coffee
-ZELLE.*JANE,Jane (Babysitter),Personal,Childcare
+[Netflix]
+match: contains("NETFLIX")
+category: Subscriptions
+subcategory: Streaming
+tags: entertainment, recurring
 
-Pattern syntax (Python regex):
-  NETFLIX           Contains "NETFLIX"
-  DELTA|SOUTHWEST   Either one
-  COSTCO(?!.*GAS)   COSTCO but not COSTCO GAS
-  ^ATT\\s           Starts with "ATT "
+[Uber Rides]
+match: regex("UBER(?!.*EATS)")
+category: Transportation
+subcategory: Rideshare
+
+Match expressions:
+  contains("X")     Case-insensitive substring match
+  regex("pattern")  Full regex support
+  amount > 100      Amount conditions
+  month == 12       Date conditions
 
 Use: tally inspect <file.csv> to see transaction formats.
 '''
@@ -191,6 +308,9 @@ data_sources:
 
 output_dir: output
 html_filename: spending_summary.html
+
+# Merchant rules file - expression-based categorization
+merchants_file: config/merchants.merchants
 
 # Sections file (optional) - custom spending views
 # Create config/sections.sections and uncomment:
@@ -219,6 +339,50 @@ html_filename: spending_summary.html
 #   - "\\\\s+ID:.*$"            # Bank of America ID suffix
 '''
 
+STARTER_MERCHANTS = '''# Tally Merchant Rules
+#
+# Expression-based rules for categorizing transactions.
+# First match wins (file order).
+#
+# Match expressions:
+#   contains("X")     - Case-insensitive substring match
+#   regex("pattern")  - Regex pattern match
+#   amount > 100      - Amount conditions
+#   month == 12       - Date component (month, year, day)
+#   date >= "2025-01-01"  - Date range
+#
+# You can combine conditions with 'and', 'or', 'not'
+#
+# Run: tally inspect <file> to see your transaction descriptions.
+# Run: tally discover to find unknown merchants.
+
+# === Variables (optional) ===
+# is_large = amount > 500
+# is_holiday = month >= 11 and month <= 12
+
+# === Example Rules ===
+
+# [Netflix]
+# match: contains("NETFLIX")
+# category: Subscriptions
+# subcategory: Streaming
+# tags: entertainment
+
+# [Costco Grocery]
+# match: contains("COSTCO") and amount <= 200
+# category: Food
+# subcategory: Grocery
+
+# [Costco Bulk]
+# match: contains("COSTCO") and amount > 200
+# category: Shopping
+# subcategory: Wholesale
+
+# === Add your rules below ===
+
+'''
+
+# Legacy format (deprecated)
 STARTER_MERCHANT_CATEGORIES = '''# Merchant Categorization Rules
 #
 # Define your merchant categorization rules here.
@@ -532,14 +696,14 @@ def init_config(target_dir):
     else:
         files_skipped.append('config/settings.yaml')
 
-    # Write merchant_categories.csv
-    merchants_path = os.path.join(config_dir, 'merchant_categories.csv')
+    # Write merchants.merchants (new expression-based format)
+    merchants_path = os.path.join(config_dir, 'merchants.merchants')
     if not os.path.exists(merchants_path):
         with open(merchants_path, 'w', encoding='utf-8') as f:
-            f.write(STARTER_MERCHANT_CATEGORIES)
-        files_created.append('config/merchant_categories.csv')
+            f.write(STARTER_MERCHANTS)
+        files_created.append('config/merchants.merchants')
     else:
-        files_skipped.append('config/merchant_categories.csv')
+        files_skipped.append('config/merchants.merchants')
 
     # Write sections.sections
     sections_path = os.path.join(config_dir, 'sections.sections')
@@ -695,22 +859,8 @@ def cmd_run(args):
         print(f"Config: {config_dir}/{args.settings}")
         print()
 
-    # Load merchant rules
-    rules_file = os.path.join(config_dir, 'merchant_categories.csv')
-    if os.path.exists(rules_file):
-        rules = get_all_rules(rules_file)
-        if not args.quiet:
-            print(f"Loaded {len(rules)} categorization rules from {rules_file}")
-            if len(rules) == 0:
-                print()
-                print("⚠️  No merchant rules defined - all transactions will be 'Unknown'")
-                print("    Run 'tally discover' to find unknown merchants and get suggested rules.")
-                print("    Tip: Use an AI agent with 'tally discover' to auto-generate rules!")
-                print()
-    else:
-        rules = get_all_rules()  # No rules file
-        if not args.quiet:
-            print(f"No merchant_categories.csv found - transactions will be categorized as Unknown")
+    # Load merchant rules (with migration check for CSV -> .merchants)
+    rules = _check_merchant_migration(config, config_dir, args.quiet, getattr(args, 'migrate', False))
 
     # Parse transactions from configured data sources
     all_txns = []
@@ -925,9 +1075,9 @@ def cmd_discover(args):
         sys.exit(1)
 
     # Load merchant rules
-    rules_file = os.path.join(config_dir, 'merchant_categories.csv')
-    if os.path.exists(rules_file):
-        rules = get_all_rules(rules_file)
+    merchants_file = config.get('_merchants_file')
+    if merchants_file and os.path.exists(merchants_file):
+        rules = get_all_rules(merchants_file)
     else:
         rules = get_all_rules()
 
@@ -999,28 +1149,29 @@ def cmd_discover(args):
 
     # Output format
     if args.format == 'csv':
-        # CSV output for easy import
+        # Legacy CSV output (deprecated)
+        print("# NOTE: CSV format is deprecated. Use .merchants format instead.")
+        print("# See 'tally workflow' for the new format.")
+        print("#")
         print("# Suggested rules for unknown merchants")
-        print("# Copy the lines you want to merchant_categories.csv")
         print("Pattern,Merchant,Category,Subcategory")
         print()
 
         for raw_desc, stats in sorted_descs:
-            # Generate a suggested pattern
             pattern = suggest_pattern(raw_desc)
-            # Generate a clean merchant name
             merchant = suggest_merchant_name(raw_desc)
-            # Placeholder category - agent should fill in
             print(f"{pattern},{merchant},CATEGORY,SUBCATEGORY  # ${stats['total']:.2f} ({stats['count']} txns)")
 
     elif args.format == 'json':
         import json
         output = []
         for raw_desc, stats in sorted_descs:
+            pattern = suggest_pattern(raw_desc)
+            merchant = suggest_merchant_name(raw_desc)
             output.append({
                 'raw_description': raw_desc,
-                'suggested_pattern': suggest_pattern(raw_desc),
-                'suggested_merchant': suggest_merchant_name(raw_desc),
+                'suggested_merchant': merchant,
+                'suggested_rule': suggest_merchants_rule(merchant, pattern),
                 'count': stats['count'],
                 'total_spend': round(stats['total'], 2),
                 'examples': [
@@ -1047,9 +1198,12 @@ def cmd_discover(args):
 
             print(f"{i}. {raw_desc[:60]}")
             print(f"   Count: {stats['count']} | Total: ${stats['total']:.2f}")
-            print(f"   Suggested pattern: {pattern}")
             print(f"   Suggested merchant: {merchant}")
-            print(f"   CSV: {pattern},{merchant},CATEGORY,SUBCATEGORY")
+            print()
+            print(f"   {C.DIM}[{merchant}]")
+            print(f"   match: contains(\"{pattern}\")")
+            print(f"   category: CATEGORY")
+            print(f"   subcategory: SUBCATEGORY{C.RESET}")
             print()
 
     _print_deprecation_warnings(config)
@@ -1114,6 +1268,16 @@ def suggest_merchant_name(description):
         return ' '.join(words).title()
 
     return 'Unknown'
+
+
+def suggest_merchants_rule(merchant_name, pattern):
+    """Generate a suggested rule block in .merchants format."""
+    # Escape quotes in pattern if needed
+    escaped_pattern = pattern.replace('"', '\\"')
+    return f"""[{merchant_name}]
+match: contains("{escaped_pattern}")
+category: CATEGORY
+subcategory: SUBCATEGORY"""
 
 
 def _detect_file_format(filepath):
@@ -1613,52 +1777,87 @@ def cmd_diag(args):
     print("MERCHANT RULES")
     print("-" * 70)
 
-    rules_path = os.path.join(config_dir, 'merchant_categories.csv')
-    diag = diagnose_rules(rules_path)
+    merchants_file = config.get('_merchants_file') if config else None
+    merchants_format = config.get('_merchants_format') if config else None
 
-    print(f"User rules file: {diag['user_rules_path']}")
-    print(f"  Exists: {diag['user_rules_exists']}")
+    if merchants_file and os.path.exists(merchants_file):
+        print(f"Merchants file: {merchants_file}")
+        print(f"  Format: {merchants_format or 'unknown'}")
+        print(f"  Exists: True")
 
-    if diag['user_rules_exists']:
-        print(f"  File size: {diag.get('file_size_bytes', 0)} bytes")
-        print(f"  Total lines: {diag.get('file_lines', 0)}")
-        print(f"  Non-comment lines: {diag.get('non_comment_lines', 0)}")
-        print(f"  Has valid header: {diag.get('has_header', 'unknown')}")
-        print(f"  Rules loaded: {diag['user_rules_count']}")
+        # Get file stats
+        file_size = os.path.getsize(merchants_file)
+        print(f"  File size: {file_size} bytes")
 
-        if diag['user_rules_errors']:
+        if merchants_format == 'new':
+            # New .merchants format
+            try:
+                from .merchant_engine import load_merchants_file
+                from pathlib import Path
+                engine = load_merchants_file(Path(merchants_file))
+                print(f"  Rules loaded: {len(engine.rules)}")
+
+                # Tag statistics
+                rules_with_tags = sum(1 for r in engine.rules if r.tags)
+                if rules_with_tags > 0:
+                    print()
+                    pct = (rules_with_tags / len(engine.rules) * 100) if engine.rules else 0
+                    print(f"  Rules with tags: {rules_with_tags}/{len(engine.rules)} ({pct:.0f}%)")
+                    all_tags = set()
+                    for r in engine.rules:
+                        all_tags.update(r.tags)
+                    if all_tags:
+                        print(f"  Unique tags: {', '.join(sorted(all_tags))}")
+
+                print()
+                print("  MERCHANT RULES (all):")
+                for rule in engine.rules:
+                    print(f"    [{rule.name}]")
+                    print(f"      match: {rule.match_expr}")
+                    print(f"      category: {rule.category} > {rule.subcategory}")
+                    if rule.tags:
+                        print(f"      tags: {', '.join(rule.tags)}")
+            except Exception as e:
+                print(f"  Error loading rules: {e}")
+        else:
+            # Legacy CSV format
+            rules_path = merchants_file
+            diag = diagnose_rules(rules_path)
+            print(f"  Rules loaded: {diag['user_rules_count']}")
             print()
-            print("  ERRORS/WARNINGS:")
-            for err in diag['user_rules_errors']:
-                print(f"    - {err}")
+            print(f"  {C.YELLOW}NOTE: Using legacy CSV format. Run 'tally run --migrate' to upgrade.{C.RESET}")
 
-        # Tag statistics
-        if diag.get('rules_with_tags', 0) > 0:
-            print()
-            pct = (diag['rules_with_tags'] / diag['user_rules_count'] * 100) if diag['user_rules_count'] > 0 else 0
-            print(f"  Rules with tags: {diag['rules_with_tags']}/{diag['user_rules_count']} ({pct:.0f}%)")
-            if diag.get('unique_tags'):
-                print(f"  Unique tags: {', '.join(sorted(diag['unique_tags']))}")
+            if diag['user_rules_errors']:
+                print()
+                print("  ERRORS/WARNINGS:")
+                for err in diag['user_rules_errors']:
+                    print(f"    - {err}")
 
-        if diag['user_rules']:
-            print()
-            print("  USER RULES (all):")
-            for rule in diag['user_rules']:
-                if len(rule) == 5:
-                    pattern, merchant, category, subcategory, tags = rule
-                else:
-                    pattern, merchant, category, subcategory = rule
-                    tags = []
-                print(f"    {pattern}")
-                tags_str = f" [{', '.join(tags)}]" if tags else ""
-                print(f"      -> {merchant} | {category} > {subcategory}{tags_str}")
+            if diag.get('rules_with_tags', 0) > 0:
+                print()
+                pct = (diag['rules_with_tags'] / diag['user_rules_count'] * 100) if diag['user_rules_count'] > 0 else 0
+                print(f"  Rules with tags: {diag['rules_with_tags']}/{diag['user_rules_count']} ({pct:.0f}%)")
+                if diag.get('unique_tags'):
+                    print(f"  Unique tags: {', '.join(sorted(diag['unique_tags']))}")
+
+            if diag['user_rules']:
+                print()
+                print("  MERCHANT RULES (CSV format):")
+                for rule in diag['user_rules']:
+                    if len(rule) == 5:
+                        pattern, merchant, category, subcategory, tags = rule
+                    else:
+                        pattern, merchant, category, subcategory = rule
+                        tags = []
+                    print(f"    {pattern}")
+                    tags_str = f" [{', '.join(tags)}]" if tags else ""
+                    print(f"      -> {merchant} | {category} > {subcategory}{tags_str}")
     else:
+        print("Merchants file: not configured")
         print()
-        print("  No merchant_categories.csv found.")
+        print("  No merchant rules found.")
+        print("  Add 'merchants_file: config/merchants.merchants' to settings.yaml")
         print("  Transactions will be categorized as 'Unknown'.")
-    print()
-
-    print(f"Total rules: {diag['total_rules']}")
     print()
 
     # Classification rules (occurrence-based analysis)
@@ -1794,7 +1993,7 @@ def cmd_workflow(args):
     # Default paths (used when no config exists)
     path_data = make_path('data', trailing_sep=True) if config_dir else './data/'
     path_settings = make_path(os.path.join('config', 'settings.yaml')) if config_dir else './config/settings.yaml'
-    path_rules = make_path(os.path.join('config', 'merchant_categories.csv')) if config_dir else './config/merchant_categories.csv'
+    path_merchants = make_path(os.path.join('config', 'merchants.merchants')) if config_dir else './config/merchants.merchants'
 
     if has_config:
         try:
@@ -1866,13 +2065,14 @@ def cmd_workflow(args):
     # Show categorization workflow if there are unknowns
     if unknown_count > 0:
         section("Categorization Workflow")
-        print(f"    {C.DIM}1.{C.RESET} Get unknown merchants with suggested patterns:")
+        print(f"    {C.DIM}1.{C.RESET} Get unknown merchants with suggested rules:")
         print(f"       {C.GREEN}tally discover --format json{C.RESET}")
         print()
-        print(f"    {C.DIM}2.{C.RESET} Add rules to {C.CYAN}{path_rules}{C.RESET}:")
-        print(f"       {C.DIM}Pattern,Merchant,Category,Subcategory,Tags")
-        print(f"       STARBUCKS,Starbucks,Food,Coffee,")
-        print(f"       UBER\\s(?!EATS),Uber,Transport,Rideshare,business{C.RESET}")
+        print(f"    {C.DIM}2.{C.RESET} Add rules to {C.CYAN}{path_merchants}{C.RESET}:")
+        print(f"       {C.DIM}[Starbucks]")
+        print(f"       match: contains(\"STARBUCKS\")")
+        print(f"       category: Food")
+        print(f"       subcategory: Coffee{C.RESET}")
         print()
         print(f"    {C.DIM}3.{C.RESET} Check progress:")
         print(f"       {C.GREEN}tally run --summary{C.RESET}")
@@ -1904,24 +2104,27 @@ def cmd_workflow(args):
     print(f"      - \"^SQ\\\\s*\\\\*\"       # Square")
     print(f"      - \"\\\\s+DES:.*$\"      # BOA suffix{C.RESET}")
 
-    section("CSV Format")
-    print(f"    {C.DIM}Pattern,Merchant,Category,Subcategory,Tags{C.RESET}")
+    section("Merchant Rules (.merchants)")
+    print(f"    {C.DIM}Expression-based rules with full power:{C.RESET}")
     print()
-    print(f"    {C.BOLD}Pattern{C.RESET}      Python regex, case-insensitive")
-    print(f"    {C.BOLD}Tags{C.RESET}         Optional, pipe-separated: {C.DIM}business|reimbursable{C.RESET}")
+    print(f"    {C.DIM}[Netflix]")
+    print(f"    match: contains(\"NETFLIX\")")
+    print(f"    category: Subscriptions")
+    print(f"    subcategory: Streaming")
+    print(f"    tags: entertainment, recurring{C.RESET}")
     print()
-    print(f"    {C.DIM}Examples:{C.RESET}")
-    patterns = [
-        ("STARBUCKS", "contains STARBUCKS"),
-        ("UBER|LYFT", "either UBER or LYFT"),
-        ("UBER\\s(?!EATS)", "UBER but not UBER EATS"),
-        ("COSTCO[amount>200]", "Costco orders over $200"),
+    print(f"    {C.BOLD}Match functions:{C.RESET}")
+    funcs = [
+        ('contains("X")', "Case-insensitive substring match"),
+        ('regex("pattern")', "Regex pattern match"),
+        ('amount > 100', "Amount conditions"),
+        ('month == 12', "Date components (month, year, day)"),
     ]
-    for pattern, desc in patterns:
-        print(f"      {C.CYAN}{pattern:<22}{C.RESET} {C.DIM}{desc}{C.RESET}")
-
+    for func, desc in funcs:
+        print(f"      {C.CYAN}{func:<22}{C.RESET} {C.DIM}{desc}{C.RESET}")
     print()
-    print(f"  {C.DIM}First match wins — put specific patterns before general ones{C.RESET}")
+    print(f"    {C.DIM}First match wins — put specific patterns before general ones{C.RESET}")
+    print(f"    {C.DIM}Tags are accumulated from ALL matching rules{C.RESET}")
 
     section("Sections (Optional)")
     print(f"    {C.DIM}Create custom spending views with {C.RESET}{C.CYAN}config/sections.sections{C.RESET}")
@@ -2055,9 +2258,9 @@ def cmd_explain(args):
         sys.exit(1)
 
     # Load merchant rules
-    rules_file = os.path.join(config_dir, 'merchant_categories.csv')
-    if os.path.exists(rules_file):
-        rules = get_all_rules(rules_file)
+    merchants_file = config.get('_merchants_file')
+    if merchants_file and os.path.exists(merchants_file):
+        rules = get_all_rules(merchants_file)
     else:
         rules = get_all_rules()
 
@@ -2296,6 +2499,21 @@ def cmd_explain(args):
     _print_deprecation_warnings(config)
 
 
+def _format_match_expr(pattern):
+    """Convert a regex pattern to a readable match expression."""
+    import re
+    # If it looks like a simple word match, show as contains()
+    if re.match(r'^[A-Z0-9\s]+$', pattern):
+        # Simple uppercase pattern - convert to contains()
+        return f'contains("{pattern}")'
+    elif '\\s' in pattern or '(?!' in pattern or '|' in pattern or '[' in pattern:
+        # Complex regex - show as regex()
+        return f'regex("{pattern}")'
+    else:
+        # Default to contains() for simple patterns
+        return f'contains("{pattern}")'
+
+
 def _print_description_explanation(query, trace, output_format, verbose):
     """Print explanation for how a raw description matches."""
     import json
@@ -2338,10 +2556,13 @@ def _print_description_explanation(query, trace, output_format, verbose):
             print("  Run 'tally discover' to add a rule for this merchant.")
         else:
             rule = trace['matched_rule']
-            print(f"  Matched: {rule['pattern']} -> {trace['merchant']}")
-            print(f"  Category: {trace['category']} > {trace['subcategory']}")
+            print(f"  Matched Rule:")
+            print(f"    {C.DIM}[{trace['merchant']}]{C.RESET}")
+            print(f"    {C.DIM}match: {_format_match_expr(rule['pattern'])}{C.RESET}")
+            print(f"    {C.DIM}category: {trace['category']}{C.RESET}")
+            print(f"    {C.DIM}subcategory: {trace['subcategory']}{C.RESET}")
             if rule.get('tags'):
-                print(f"  Tags: {', '.join(rule['tags'])}")
+                print(f"    {C.DIM}tags: {', '.join(rule['tags'])}{C.RESET}")
             if verbose >= 1:
                 print(f"  Matched on: {rule['matched_on']} description")
         print()
@@ -2734,6 +2955,11 @@ def main():
         default=True,
         help='Output CSS/JS as separate files instead of embedding (easier to iterate on styling)'
     )
+    run_parser.add_argument(
+        '--migrate',
+        action='store_true',
+        help='Migrate merchant_categories.csv to new .merchants format (non-interactive)'
+    )
     # inspect subcommand
     inspect_parser = subparsers.add_parser(
         'inspect',
@@ -2755,9 +2981,9 @@ def main():
     # discover subcommand
     discover_parser = subparsers.add_parser(
         'discover',
-        help='List uncategorized transactions with suggested patterns (use --format json for LLMs)',
+        help='List uncategorized transactions with suggested rules (use --format json for LLMs)',
         description='Analyze transactions to find unknown merchants, sorted by spend. '
-                    'Outputs suggested patterns for merchant_categories.csv.'
+                    'Outputs suggested rules for your .merchants file.'
     )
     discover_parser.add_argument(
         'config',

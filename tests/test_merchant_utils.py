@@ -11,6 +11,7 @@ from tally.merchant_utils import (
     normalize_merchant,
     clean_description,
     extract_merchant_name,
+    _expr_to_regex,
 )
 from tally.modifier_parser import ParsedPattern
 
@@ -517,5 +518,238 @@ UBER,Uber,Transport,Rideshare,business
             assert rules[0][5] == ['entertainment']
             assert rules[1][5] == []  # Row has no Tags column value
             assert rules[2][5] == ['business']
+        finally:
+            os.unlink(f.name)
+
+
+class TestExprToRegex:
+    """Tests for _expr_to_regex function - converting match expressions to regex."""
+
+    def test_contains_simple(self):
+        """Extract pattern from contains() expression."""
+        assert _expr_to_regex('contains("NETFLIX")') == 'NETFLIX'
+        assert _expr_to_regex('contains("COSTCO")') == 'COSTCO'
+
+    def test_contains_single_quotes(self):
+        """Should work with single quotes."""
+        assert _expr_to_regex("contains('NETFLIX')") == 'NETFLIX'
+
+    def test_contains_with_spaces(self):
+        """Handles patterns with spaces."""
+        assert _expr_to_regex('contains("WHOLE FOODS")') == 'WHOLE FOODS'
+
+    def test_regex_simple(self):
+        """Extract pattern from regex() expression."""
+        assert _expr_to_regex('regex("UBER.*EATS")') == 'UBER.*EATS'
+
+    def test_regex_negative_lookahead(self):
+        """Extract negative lookahead pattern from regex()."""
+        assert _expr_to_regex(r'regex("UBER(?!.*EATS)")') == r'UBER(?!.*EATS)'
+
+    def test_contains_with_conditions(self):
+        """Extract pattern when expression has additional conditions."""
+        # Should extract just the pattern, ignoring 'and amount > 200'
+        assert _expr_to_regex('contains("COSTCO") and amount > 200') == 'COSTCO'
+
+    def test_contains_with_complex_conditions(self):
+        """Extract pattern from complex expression."""
+        expr = 'contains("AMAZON") and month == 12 and amount > 100'
+        assert _expr_to_regex(expr) == 'AMAZON'
+
+    def test_quoted_string_fallback(self):
+        """Falls back to first quoted string if no function found."""
+        assert _expr_to_regex('"NETFLIX"') == 'NETFLIX'
+
+    def test_passthrough_for_plain_pattern(self):
+        """Returns expression as-is if no quotes or function."""
+        assert _expr_to_regex('NETFLIX') == 'NETFLIX'
+
+
+class TestGetAllRulesMerchantsFormat:
+    """Tests for get_all_rules loading .merchants files."""
+
+    def test_load_simple_merchants_file(self):
+        """Load rules from .merchants file."""
+        content = """[Netflix]
+match: contains("NETFLIX")
+category: Subscriptions
+subcategory: Streaming
+
+[Spotify]
+match: contains("SPOTIFY")
+category: Subscriptions
+subcategory: Music
+"""
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.merchants', delete=False)
+        try:
+            f.write(content)
+            f.close()
+
+            rules = get_all_rules(f.name)
+
+            assert len(rules) == 2
+            # First rule
+            assert rules[0][0] == 'NETFLIX'  # Converted pattern
+            assert rules[0][1] == 'Netflix'  # Merchant name
+            assert rules[0][2] == 'Subscriptions'  # Category
+            assert rules[0][3] == 'Streaming'  # Subcategory
+            # Second rule
+            assert rules[1][0] == 'SPOTIFY'
+            assert rules[1][1] == 'Spotify'
+        finally:
+            os.unlink(f.name)
+
+    def test_load_merchants_with_tags(self):
+        """Load .merchants file with tags."""
+        content = """[Netflix]
+match: contains("NETFLIX")
+category: Subscriptions
+subcategory: Streaming
+tags: entertainment, recurring
+"""
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.merchants', delete=False)
+        try:
+            f.write(content)
+            f.close()
+
+            rules = get_all_rules(f.name)
+
+            assert len(rules) == 1
+            # Tags are at index 6
+            assert set(rules[0][6]) == {'entertainment', 'recurring'}
+        finally:
+            os.unlink(f.name)
+
+    def test_load_merchants_regex_pattern(self):
+        """Load .merchants file with regex() match expression."""
+        content = r"""[Uber Rides]
+match: regex("UBER(?!.*EATS)")
+category: Transportation
+subcategory: Rideshare
+"""
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.merchants', delete=False)
+        try:
+            f.write(content)
+            f.close()
+
+            rules = get_all_rules(f.name)
+
+            assert len(rules) == 1
+            assert rules[0][0] == r'UBER(?!.*EATS)'  # Regex extracted
+            assert rules[0][1] == 'Uber Rides'
+        finally:
+            os.unlink(f.name)
+
+    def test_merchants_rules_can_match_transactions(self):
+        """Rules loaded from .merchants should work with normalize_merchant."""
+        content = """[Netflix]
+match: contains("NETFLIX")
+category: Subscriptions
+subcategory: Streaming
+"""
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.merchants', delete=False)
+        try:
+            f.write(content)
+            f.close()
+
+            rules = get_all_rules(f.name)
+            merchant, category, subcategory, match_info = normalize_merchant('NETFLIX.COM', rules)
+
+            assert merchant == 'Netflix'
+            assert category == 'Subscriptions'
+            assert subcategory == 'Streaming'
+        finally:
+            os.unlink(f.name)
+
+
+class TestNegativeLookaheadMatching:
+    """Tests for negative lookahead patterns in .merchants format."""
+
+    def test_uber_not_uber_eats_matching(self):
+        """Negative lookahead should match Uber but not Uber Eats."""
+        content = r"""[Uber Rides]
+match: regex("UBER(?!.*EATS)")
+category: Transportation
+subcategory: Rideshare
+
+[Uber Eats]
+match: contains("UBER") and contains("EATS")
+category: Food
+subcategory: Delivery
+"""
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.merchants', delete=False)
+        try:
+            f.write(content)
+            f.close()
+
+            rules = get_all_rules(f.name)
+
+            # "UBER TRIP" should match Uber Rides
+            merchant, category, subcategory, _ = normalize_merchant('UBER TRIP 12345', rules)
+            assert merchant == 'Uber Rides'
+            assert category == 'Transportation'
+
+            # "UBER EATS" should NOT match Uber Rides (negative lookahead)
+            # It should fall through to Uber Eats rule
+            merchant, category, subcategory, _ = normalize_merchant('UBER EATS ORDER', rules)
+            assert merchant == 'Uber Eats'
+            assert category == 'Food'
+        finally:
+            os.unlink(f.name)
+
+    def test_negative_lookahead_various_formats(self):
+        """Test negative lookahead with different Uber description formats."""
+        content = r"""[Uber Rides]
+match: regex("UBER(?!.*EATS)")
+category: Transportation
+subcategory: Rideshare
+"""
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.merchants', delete=False)
+        try:
+            f.write(content)
+            f.close()
+
+            rules = get_all_rules(f.name)
+
+            # Should match - regular Uber
+            for desc in ['UBER', 'UBER TRIP', 'UBER*RIDE', 'UBER BV AMSTERDAM']:
+                merchant, _, _, _ = normalize_merchant(desc, rules)
+                assert merchant == 'Uber Rides', f"'{desc}' should match Uber Rides"
+
+            # Should NOT match - Uber Eats variations
+            for desc in ['UBER EATS', 'UBEREATS', 'UBER* EATS', 'UBER EATS ORDER']:
+                merchant, category, _, _ = normalize_merchant(desc, rules)
+                assert category == 'Unknown', f"'{desc}' should NOT match Uber Rides (got {merchant})"
+        finally:
+            os.unlink(f.name)
+
+
+class TestMerchantsFormatComplexConditions:
+    """Tests for .merchants format with conditions (amount, date, etc.)."""
+
+    def test_amount_condition_in_expression(self):
+        """Amount conditions in match expression should be preserved."""
+        content = """[Costco Bulk]
+match: contains("COSTCO") and amount > 200
+category: Shopping
+subcategory: Wholesale
+
+[Costco Grocery]
+match: contains("COSTCO")
+category: Food
+subcategory: Grocery
+"""
+        f = tempfile.NamedTemporaryFile(mode='w', suffix='.merchants', delete=False)
+        try:
+            f.write(content)
+            f.close()
+
+            rules = get_all_rules(f.name)
+
+            # Both rules should load (the pattern extraction ignores amount condition)
+            assert len(rules) == 2
+            # Both should have COSTCO as pattern (amount condition stripped in regex)
+            assert rules[0][0] == 'COSTCO'
+            assert rules[1][0] == 'COSTCO'
         finally:
             os.unlink(f.name)

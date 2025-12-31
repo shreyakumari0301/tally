@@ -1,0 +1,706 @@
+"""Tests for the merchant rule engine."""
+
+import pytest
+from datetime import date
+from tally.merchant_engine import (
+    MerchantEngine,
+    MerchantRule,
+    MatchResult,
+    MerchantParseError,
+    parse_merchants,
+    csv_to_rules,
+    csv_to_merchants_content,
+    csv_rule_to_merchant_rule,
+)
+from tally.modifier_parser import parse_pattern_with_modifiers
+
+
+class TestMerchantRule:
+    """Tests for MerchantRule dataclass."""
+
+    def test_merchant_defaults_to_name(self):
+        """Merchant field defaults to rule name."""
+        rule = MerchantRule(name="Netflix", match_expr='contains("NETFLIX")')
+        assert rule.merchant == "Netflix"
+
+    def test_merchant_can_be_overridden(self):
+        """Merchant field can be set explicitly."""
+        rule = MerchantRule(
+            name="Netflix Streaming",
+            match_expr='contains("NETFLIX")',
+            merchant="Netflix"
+        )
+        assert rule.merchant == "Netflix"
+
+    def test_is_categorization_rule(self):
+        """is_categorization_rule is True when category is set."""
+        cat_rule = MerchantRule(
+            name="Test", match_expr="true", category="Shopping"
+        )
+        tag_rule = MerchantRule(
+            name="Test", match_expr="true", tags={"large"}
+        )
+        assert cat_rule.is_categorization_rule
+        assert not tag_rule.is_categorization_rule
+
+
+class TestParsing:
+    """Tests for parsing .merchants files."""
+
+    def test_simple_rule(self):
+        """Parse a simple rule."""
+        content = '''
+[Netflix]
+match: contains("NETFLIX")
+category: Subscriptions
+subcategory: Streaming
+'''
+        engine = parse_merchants(content)
+        assert len(engine.rules) == 1
+        rule = engine.rules[0]
+        assert rule.name == "Netflix"
+        assert rule.match_expr == 'contains("NETFLIX")'
+        assert rule.category == "Subscriptions"
+        assert rule.subcategory == "Streaming"
+        assert rule.merchant == "Netflix"
+
+    def test_rule_with_tags(self):
+        """Parse a rule with tags."""
+        content = '''
+[Netflix]
+match: contains("NETFLIX")
+category: Subscriptions
+subcategory: Streaming
+tags: entertainment, recurring
+'''
+        engine = parse_merchants(content)
+        assert engine.rules[0].tags == {"entertainment", "recurring"}
+
+    def test_rule_with_custom_merchant(self):
+        """Parse a rule with custom merchant name."""
+        content = '''
+[Netflix Streaming Service]
+match: contains("NETFLIX")
+category: Subscriptions
+subcategory: Streaming
+merchant: Netflix
+'''
+        engine = parse_merchants(content)
+        assert engine.rules[0].name == "Netflix Streaming Service"
+        assert engine.rules[0].merchant == "Netflix"
+
+    def test_tag_only_rule(self):
+        """Parse a tag-only rule (no category)."""
+        content = '''
+[Large Purchase]
+match: amount > 500
+tags: large
+'''
+        engine = parse_merchants(content)
+        assert len(engine.rules) == 1
+        rule = engine.rules[0]
+        assert rule.category == ""
+        assert rule.tags == {"large"}
+        assert not rule.is_categorization_rule
+
+    def test_multiple_rules(self):
+        """Parse multiple rules."""
+        content = '''
+[Netflix]
+match: contains("NETFLIX")
+category: Subscriptions
+subcategory: Streaming
+
+[Amazon]
+match: contains("AMAZON")
+category: Shopping
+subcategory: Online
+'''
+        engine = parse_merchants(content)
+        assert len(engine.rules) == 2
+        assert engine.rules[0].name == "Netflix"
+        assert engine.rules[1].name == "Amazon"
+
+    def test_comments_ignored(self):
+        """Comments are ignored."""
+        content = '''
+# This is a comment
+[Netflix]
+# Another comment
+match: contains("NETFLIX")
+category: Subscriptions
+subcategory: Streaming
+'''
+        engine = parse_merchants(content)
+        assert len(engine.rules) == 1
+
+    def test_variables(self):
+        """Parse top-level variables."""
+        content = '''
+is_large = amount > 500
+is_holiday = month >= 11 and month <= 12
+
+[Large Holiday Purchase]
+match: is_large and is_holiday
+category: Shopping
+subcategory: Holiday
+'''
+        engine = parse_merchants(content)
+        assert "is_large" in engine.variables
+        assert "is_holiday" in engine.variables
+        assert engine.variables["is_large"] == "amount > 500"
+
+    def test_empty_rule_name_error(self):
+        """Empty rule name raises error."""
+        content = '''
+[]
+match: true
+category: Test
+'''
+        with pytest.raises(MerchantParseError, match="Empty rule name"):
+            parse_merchants(content)
+
+    def test_missing_match_error(self):
+        """Missing match expression raises error."""
+        content = '''
+[Test]
+category: Shopping
+'''
+        with pytest.raises(MerchantParseError, match="missing 'match:'"):
+            parse_merchants(content)
+
+    def test_missing_category_and_tags_error(self):
+        """Rule must have category or tags."""
+        content = '''
+[Test]
+match: true
+'''
+        with pytest.raises(MerchantParseError, match="must have 'category:' or 'tags:'"):
+            parse_merchants(content)
+
+    def test_invalid_match_expression_error(self):
+        """Invalid match expression raises error."""
+        content = '''
+[Test]
+match: invalid syntax here!!
+category: Test
+'''
+        with pytest.raises(MerchantParseError, match="Invalid match expression"):
+            parse_merchants(content)
+
+    def test_unknown_property_error(self):
+        """Unknown property raises error."""
+        content = '''
+[Test]
+match: true
+category: Test
+unknown_property: value
+'''
+        with pytest.raises(MerchantParseError, match="Unknown property"):
+            parse_merchants(content)
+
+
+class TestMatching:
+    """Tests for transaction matching."""
+
+    def test_simple_match(self):
+        """Match a simple contains rule."""
+        content = '''
+[Netflix]
+match: contains("NETFLIX")
+category: Subscriptions
+subcategory: Streaming
+'''
+        engine = parse_merchants(content)
+        txn = {'description': 'NETFLIX.COM STREAMING', 'amount': 15.99}
+        result = engine.match(txn)
+
+        assert result.matched
+        assert result.merchant == "Netflix"
+        assert result.category == "Subscriptions"
+        assert result.subcategory == "Streaming"
+
+    def test_no_match(self):
+        """No match returns empty result."""
+        content = '''
+[Netflix]
+match: contains("NETFLIX")
+category: Subscriptions
+subcategory: Streaming
+'''
+        engine = parse_merchants(content)
+        txn = {'description': 'AMAZON PURCHASE', 'amount': 45.00}
+        result = engine.match(txn)
+
+        assert not result.matched
+        assert result.merchant == ""
+        assert result.category == ""
+
+    def test_first_match_wins(self):
+        """First matching categorization rule wins."""
+        content = '''
+[Streaming Service]
+match: contains("NETFLIX")
+category: Entertainment
+subcategory: Streaming
+
+[Netflix Specific]
+match: contains("NETFLIX") and contains(".COM")
+category: Subscriptions
+subcategory: Monthly
+'''
+        engine = parse_merchants(content)
+        txn = {'description': 'NETFLIX.COM', 'amount': 15.99}
+        result = engine.match(txn)
+
+        # First rule matches first
+        assert result.category == "Entertainment"
+        assert result.merchant == "Streaming Service"
+
+    def test_amount_condition(self):
+        """Amount condition in match expression."""
+        content = '''
+[Small Costco]
+match: contains("COSTCO") and amount <= 200
+category: Food
+subcategory: Grocery
+
+[Large Costco]
+match: contains("COSTCO") and amount > 200
+category: Shopping
+subcategory: Wholesale
+'''
+        engine = parse_merchants(content)
+
+        small = {'description': 'COSTCO #123', 'amount': 75.00}
+        large = {'description': 'COSTCO #123', 'amount': 350.00}
+
+        assert engine.match(small).category == "Food"
+        assert engine.match(large).category == "Shopping"
+
+    def test_date_condition(self):
+        """Date conditions in match expression."""
+        content = '''
+[Black Friday]
+match: contains("BESTBUY") and date >= "2025-11-28" and date <= "2025-11-30"
+category: Shopping
+subcategory: Holiday
+
+[Regular BestBuy]
+match: contains("BESTBUY")
+category: Shopping
+subcategory: Electronics
+'''
+        engine = parse_merchants(content)
+
+        bf = {'description': 'BESTBUY', 'amount': 500, 'date': date(2025, 11, 29)}
+        regular = {'description': 'BESTBUY', 'amount': 500, 'date': date(2025, 7, 15)}
+
+        assert engine.match(bf).subcategory == "Holiday"
+        assert engine.match(regular).subcategory == "Electronics"
+
+    def test_regex_match(self):
+        """Regex pattern matching."""
+        content = '''
+[Uber Rides]
+match: regex("UBER(?!.*EATS)")
+category: Transportation
+subcategory: Rideshare
+
+[Uber Eats]
+match: contains("UBER") and contains("EATS")
+category: Food
+subcategory: Delivery
+'''
+        engine = parse_merchants(content)
+
+        rides = {'description': 'UBER TRIP', 'amount': 25.00}
+        eats = {'description': 'UBER EATS ORDER', 'amount': 30.00}
+
+        assert engine.match(rides).category == "Transportation"
+        assert engine.match(eats).category == "Food"
+
+
+class TestTwoPassTagging:
+    """Tests for two-pass evaluation (categorization + tagging)."""
+
+    def test_tags_from_categorization_rule(self):
+        """Tags are collected from the categorization rule."""
+        content = '''
+[Netflix]
+match: contains("NETFLIX")
+category: Subscriptions
+subcategory: Streaming
+tags: entertainment, recurring
+'''
+        engine = parse_merchants(content)
+        txn = {'description': 'NETFLIX', 'amount': 15.99}
+        result = engine.match(txn)
+
+        assert result.tags == {"entertainment", "recurring"}
+
+    def test_tags_accumulated_from_all_matches(self):
+        """Tags accumulate from ALL matching rules."""
+        content = '''
+[Netflix]
+match: contains("NETFLIX")
+category: Subscriptions
+subcategory: Streaming
+tags: entertainment
+
+[Large Purchase]
+match: amount > 500
+tags: large
+
+[Holiday Season]
+match: month >= 11 and month <= 12
+tags: holiday
+'''
+        engine = parse_merchants(content)
+
+        # Match Netflix + Large + Holiday
+        txn = {
+            'description': 'NETFLIX PREMIUM',
+            'amount': 600.00,
+            'date': date(2025, 12, 15)
+        }
+        result = engine.match(txn)
+
+        assert result.matched
+        assert result.category == "Subscriptions"
+        assert result.tags == {"entertainment", "large", "holiday"}
+        assert len(result.tag_rules) == 3
+
+    def test_tag_only_rules_dont_categorize(self):
+        """Tag-only rules don't set category."""
+        content = '''
+[Large Purchase]
+match: amount > 500
+tags: large
+
+[Netflix]
+match: contains("NETFLIX")
+category: Subscriptions
+subcategory: Streaming
+'''
+        engine = parse_merchants(content)
+
+        # Large Purchase matches first, but shouldn't categorize
+        txn = {'description': 'NETFLIX', 'amount': 600.00}
+        result = engine.match(txn)
+
+        # Category comes from Netflix rule
+        assert result.category == "Subscriptions"
+        # Tags include both
+        assert "large" in result.tags
+
+    def test_uncategorized_but_tagged(self):
+        """Transaction can have tags without category."""
+        content = '''
+[Large Purchase]
+match: amount > 500
+tags: large
+
+[Holiday]
+match: month == 12
+tags: holiday
+'''
+        engine = parse_merchants(content)
+
+        txn = {
+            'description': 'UNKNOWN MERCHANT',
+            'amount': 750.00,
+            'date': date(2025, 12, 25)
+        }
+        result = engine.match(txn)
+
+        assert not result.matched  # No categorization
+        assert result.category == ""
+        assert result.tags == {"large", "holiday"}  # But has tags
+
+
+class TestVariables:
+    """Tests for variable support in rules."""
+
+    def test_variable_in_match(self):
+        """Variables can be used in match expressions."""
+        content = '''
+is_large = amount > 500
+
+[Large Purchase]
+match: is_large
+category: Shopping
+subcategory: Big Ticket
+'''
+        engine = parse_merchants(content)
+
+        small = {'description': 'STORE', 'amount': 100}
+        large = {'description': 'STORE', 'amount': 750}
+
+        assert not engine.match(small).matched
+        assert engine.match(large).matched
+
+    def test_combined_variable_and_pattern(self):
+        """Variables combined with patterns."""
+        content = '''
+is_holiday = month >= 11 and month <= 12
+is_large = amount > 100
+
+[Holiday Gift]
+match: contains("AMAZON") and is_holiday and is_large
+category: Shopping
+subcategory: Gifts
+tags: holiday
+'''
+        engine = parse_merchants(content)
+
+        holiday_gift = {
+            'description': 'AMAZON ORDER',
+            'amount': 150,
+            'date': date(2025, 12, 10)
+        }
+        regular = {
+            'description': 'AMAZON ORDER',
+            'amount': 150,
+            'date': date(2025, 6, 10)
+        }
+        small_holiday = {
+            'description': 'AMAZON ORDER',
+            'amount': 25,
+            'date': date(2025, 12, 10)
+        }
+
+        assert engine.match(holiday_gift).matched
+        assert not engine.match(regular).matched
+        assert not engine.match(small_holiday).matched
+
+
+class TestEngineProperties:
+    """Tests for engine utility methods."""
+
+    def test_categorization_rules(self):
+        """Get only categorization rules."""
+        content = '''
+[Netflix]
+match: contains("NETFLIX")
+category: Subscriptions
+subcategory: Streaming
+
+[Large]
+match: amount > 500
+tags: large
+'''
+        engine = parse_merchants(content)
+
+        assert len(engine.categorization_rules) == 1
+        assert engine.categorization_rules[0].name == "Netflix"
+
+    def test_tag_only_rules(self):
+        """Get only tag-only rules."""
+        content = '''
+[Netflix]
+match: contains("NETFLIX")
+category: Subscriptions
+subcategory: Streaming
+
+[Large]
+match: amount > 500
+tags: large
+
+[Holiday]
+match: month == 12
+tags: holiday
+'''
+        engine = parse_merchants(content)
+
+        assert len(engine.tag_only_rules) == 2
+        names = {r.name for r in engine.tag_only_rules}
+        assert names == {"Large", "Holiday"}
+
+    def test_match_all(self):
+        """Match multiple transactions."""
+        content = '''
+[Netflix]
+match: contains("NETFLIX")
+category: Subscriptions
+subcategory: Streaming
+'''
+        engine = parse_merchants(content)
+
+        txns = [
+            {'description': 'NETFLIX', 'amount': 15.99},
+            {'description': 'AMAZON', 'amount': 45.00},
+            {'description': 'NETFLIX HD', 'amount': 22.99},
+        ]
+        results = engine.match_all(txns)
+
+        assert len(results) == 3
+        assert results[0].matched
+        assert not results[1].matched
+        assert results[2].matched
+
+
+class TestCSVConversion:
+    """Tests for CSV to MerchantRule conversion."""
+
+    def test_simple_csv_rule(self):
+        """Convert simple CSV rule without modifiers."""
+        parsed = parse_pattern_with_modifiers("NETFLIX")
+        rule = csv_rule_to_merchant_rule(
+            pattern="NETFLIX",
+            merchant="Netflix",
+            category="Subscriptions",
+            subcategory="Streaming",
+            parsed_pattern=parsed,
+            tags=["entertainment"],
+        )
+
+        assert rule.name == "Netflix"
+        assert rule.merchant == "Netflix"
+        assert rule.category == "Subscriptions"
+        assert rule.subcategory == "Streaming"
+        assert "entertainment" in rule.tags
+        assert 'regex("NETFLIX")' in rule.match_expr
+
+    def test_csv_rule_with_amount_modifier(self):
+        """Convert CSV rule with amount modifier."""
+        parsed = parse_pattern_with_modifiers("COSTCO[amount>200]")
+        rule = csv_rule_to_merchant_rule(
+            pattern=parsed.regex_pattern,  # "COSTCO"
+            merchant="Costco",
+            category="Shopping",
+            subcategory="Wholesale",
+            parsed_pattern=parsed,
+        )
+
+        assert 'regex("COSTCO")' in rule.match_expr
+        assert "amount > 200" in rule.match_expr
+
+    def test_csv_rule_with_amount_range(self):
+        """Convert CSV rule with amount range modifier."""
+        parsed = parse_pattern_with_modifiers("STORE[amount:50-200]")
+        rule = csv_rule_to_merchant_rule(
+            pattern=parsed.regex_pattern,
+            merchant="Store",
+            category="Shopping",
+            subcategory="General",
+            parsed_pattern=parsed,
+        )
+
+        assert "amount >= 50" in rule.match_expr
+        assert "amount <= 200" in rule.match_expr
+
+    def test_csv_rule_with_month_modifier(self):
+        """Convert CSV rule with month modifier."""
+        parsed = parse_pattern_with_modifiers("STORE[month=12]")
+        rule = csv_rule_to_merchant_rule(
+            pattern=parsed.regex_pattern,
+            merchant="Store",
+            category="Shopping",
+            subcategory="Holiday",
+            parsed_pattern=parsed,
+        )
+
+        assert "month == 12" in rule.match_expr
+
+    def test_csv_rule_with_date_modifier(self):
+        """Convert CSV rule with exact date modifier."""
+        parsed = parse_pattern_with_modifiers("STORE[date=2025-11-29]")
+        rule = csv_rule_to_merchant_rule(
+            pattern=parsed.regex_pattern,
+            merchant="Store",
+            category="Shopping",
+            subcategory="Black Friday",
+            parsed_pattern=parsed,
+        )
+
+        assert 'date == "2025-11-29"' in rule.match_expr
+
+    def test_csv_to_rules_list(self):
+        """Convert list of CSV rules."""
+        csv_rules = [
+            ("NETFLIX", "Netflix", "Subscriptions", "Streaming",
+             parse_pattern_with_modifiers("NETFLIX"), "user", ["entertainment"]),
+            ("AMAZON", "Amazon", "Shopping", "Online",
+             parse_pattern_with_modifiers("AMAZON"), "user", []),
+        ]
+        rules = csv_to_rules(csv_rules)
+
+        assert len(rules) == 2
+        assert rules[0].merchant == "Netflix"
+        assert rules[1].merchant == "Amazon"
+        assert "entertainment" in rules[0].tags
+
+    def test_csv_to_merchants_content(self):
+        """Convert CSV rules to .merchants file content."""
+        csv_rules = [
+            ("NETFLIX", "Netflix", "Subscriptions", "Streaming",
+             parse_pattern_with_modifiers("NETFLIX"), "user", ["entertainment", "recurring"]),
+            ("COSTCO", "Costco", "Shopping", "Wholesale",
+             parse_pattern_with_modifiers("COSTCO[amount>200]"), "user", []),
+        ]
+        content = csv_to_merchants_content(csv_rules)
+
+        # Check Netflix rule
+        assert "[Netflix]" in content
+        assert 'match: regex("NETFLIX")' in content
+        assert "category: Subscriptions" in content
+        assert "tags: entertainment, recurring" in content
+
+        # Check Costco rule with modifier
+        assert "[Costco]" in content
+        assert "amount > 200" in content
+
+    def test_converted_rules_match_correctly(self):
+        """Converted CSV rules match transactions correctly."""
+        csv_rules = [
+            ("NETFLIX", "Netflix", "Subscriptions", "Streaming",
+             parse_pattern_with_modifiers("NETFLIX"), "user", []),
+            ("COSTCO", "Costco Large", "Shopping", "Wholesale",
+             parse_pattern_with_modifiers("COSTCO[amount>200]"), "user", []),
+            ("COSTCO", "Costco Grocery", "Food", "Grocery",
+             parse_pattern_with_modifiers("COSTCO[amount<=200]"), "user", []),
+        ]
+        rules = csv_to_rules(csv_rules)
+
+        engine = MerchantEngine()
+        engine.rules = rules
+
+        # Test Netflix match
+        netflix = {'description': 'NETFLIX.COM', 'amount': 15.99}
+        result = engine.match(netflix)
+        assert result.merchant == "Netflix"
+        assert result.category == "Subscriptions"
+
+        # Test Costco large purchase
+        large_costco = {'description': 'COSTCO #123', 'amount': 350.00}
+        result = engine.match(large_costco)
+        assert result.merchant == "Costco Large"
+        assert result.category == "Shopping"
+
+        # Test Costco small purchase
+        small_costco = {'description': 'COSTCO #123', 'amount': 75.00}
+        result = engine.match(small_costco)
+        assert result.merchant == "Costco Grocery"
+        assert result.category == "Food"
+
+    def test_regex_pattern_preserved(self):
+        """Complex regex patterns are preserved during conversion."""
+        # Uber rides vs Uber Eats pattern
+        parsed = parse_pattern_with_modifiers(r"UBER\s(?!EATS)")
+        rule = csv_rule_to_merchant_rule(
+            pattern=parsed.regex_pattern,
+            merchant="Uber Rides",
+            category="Transportation",
+            subcategory="Rideshare",
+            parsed_pattern=parsed,
+        )
+
+        engine = MerchantEngine()
+        engine.rules = [rule]
+
+        uber_rides = {'description': 'UBER TRIP', 'amount': 25.00}
+        uber_eats = {'description': 'UBER EATS ORDER', 'amount': 30.00}
+
+        assert engine.match(uber_rides).matched
+        assert not engine.match(uber_eats).matched

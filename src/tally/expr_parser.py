@@ -5,16 +5,24 @@ Uses Python's ast.parse for parsing, then validates against a whitelist
 of allowed node types. Custom evaluator handles lookups and functions.
 
 Supports expressions like:
+    # Section filters (merchant-level)
     category == "Food" and months >= 6
     sum(payments) > 1000
     "recurring" in tags
     stddev(payments) / avg(payments) < 0.3
+
+    # Transaction matching (transaction-level)
+    contains("NETFLIX")
+    regex("UBER\\s(?!EATS)")
+    amount > 100 and month == 12
 """
 
 import ast
 import re
 import statistics
-from typing import Any, Dict, List, Optional, Set, Callable
+import warnings
+from datetime import date as date_type
+from typing import Any, Dict, List, Optional, Set, Callable, Union
 
 
 # =============================================================================
@@ -96,7 +104,16 @@ def parse_expression(expr: str) -> ast.Expression:
     Returns the AST if valid, raises ExpressionError otherwise.
     """
     try:
-        tree = ast.parse(expr, mode='eval')
+        # Suppress SyntaxWarnings for invalid escape sequences in regex patterns
+        # e.g., regex("UBER\s*EATS") contains \s which isn't a valid Python escape
+        # but is a valid regex escape. Only suppress the specific escape sequence warning.
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                'ignore',
+                category=SyntaxWarning,
+                message=r"invalid escape sequence"
+            )
+            tree = ast.parse(expr, mode='eval')
         validate_ast(tree)
         return tree
     except SyntaxError as e:
@@ -109,11 +126,77 @@ def parse_expression(expr: str) -> ast.Expression:
 # Expression Evaluator
 # =============================================================================
 
+class TransactionContext:
+    """
+    Context for evaluating expressions against a single transaction.
+
+    Provides primitives for transaction-level matching:
+    - description: Raw transaction description (string)
+    - amount: Transaction amount (float, absolute value)
+    - date: Transaction date (date object)
+    - month: Month number 1-12
+    - year: Year (e.g., 2025)
+    - day: Day of month 1-31
+    """
+
+    def __init__(
+        self,
+        description: str = "",
+        amount: float = 0.0,
+        date: Optional[date_type] = None,
+        variables: Optional[Dict[str, Any]] = None,
+    ):
+        self.description = description
+        self.amount = abs(amount)  # Always positive for matching
+        self.date = date
+        self.variables = variables or {}
+
+        # Extract date components
+        if date:
+            self.month = date.month
+            self.year = date.year
+            self.day = date.day
+        else:
+            self.month = 0
+            self.year = 0
+            self.day = 0
+
+        # Built-in functions for transaction matching
+        self.functions: Dict[str, Callable] = {
+            'contains': self._fn_contains,
+            'regex': self._fn_regex,
+            'abs': abs,
+            'round': round,
+        }
+
+    def _fn_contains(self, pattern: str) -> bool:
+        """Check if description contains pattern (case-insensitive)."""
+        return pattern.upper() in self.description.upper()
+
+    def _fn_regex(self, pattern: str) -> bool:
+        """Check if description matches regex pattern (case-insensitive)."""
+        try:
+            return bool(re.search(pattern, self.description, re.IGNORECASE))
+        except re.error as e:
+            raise ExpressionError(f"Invalid regex pattern: {e}")
+
+    @classmethod
+    def from_transaction(cls, txn: Dict, variables: Optional[Dict[str, Any]] = None) -> 'TransactionContext':
+        """Create context from a transaction dictionary."""
+        return cls(
+            description=txn.get('description', txn.get('raw_description', '')),
+            amount=txn.get('amount', 0.0),
+            date=txn.get('date'),
+            variables=variables,
+        )
+
+
 class ExpressionContext:
     """
     Context for evaluating expressions.
 
     Provides variables, functions, and transaction data for evaluation.
+    Used for merchant-level (aggregate) expressions in sections.
     """
 
     def __init__(
@@ -472,6 +555,183 @@ class ExpressionEvaluator:
             return self.evaluate(node.orelse)
 
 
+class TransactionEvaluator:
+    """
+    Evaluates a parsed AST expression against a transaction context.
+
+    Handles transaction-level primitives (description, amount, date, etc.)
+    and supports date comparisons with string literals.
+    """
+
+    def __init__(self, ctx: TransactionContext):
+        self.ctx = ctx
+
+    def evaluate(self, node: ast.AST) -> Any:
+        """Evaluate an AST node and return its value."""
+        method = f'_eval_{type(node).__name__}'
+        if hasattr(self, method):
+            return getattr(self, method)(node)
+        raise ExpressionError(f"Cannot evaluate node type: {type(node).__name__}")
+
+    def _eval_Expression(self, node: ast.Expression) -> Any:
+        return self.evaluate(node.body)
+
+    def _eval_Constant(self, node: ast.Constant) -> Any:
+        return node.value
+
+    def _eval_Name(self, node: ast.Name) -> Any:
+        name = node.id.lower()
+
+        # Check user-defined variables first
+        if name in self.ctx.variables:
+            return self.ctx.variables[name]
+
+        # Transaction-level primitives
+        if name == 'description':
+            return self.ctx.description
+        if name == 'amount':
+            return self.ctx.amount
+        if name == 'date':
+            return self.ctx.date
+        if name == 'month':
+            return self.ctx.month
+        if name == 'year':
+            return self.ctx.year
+        if name == 'day':
+            return self.ctx.day
+        if name == 'true':
+            return True
+        if name == 'false':
+            return False
+
+        raise ExpressionError(f"Unknown variable: {node.id}")
+
+    def _eval_BoolOp(self, node: ast.BoolOp) -> bool:
+        if isinstance(node.op, ast.And):
+            for value in node.values:
+                if not self.evaluate(value):
+                    return False
+            return True
+        elif isinstance(node.op, ast.Or):
+            for value in node.values:
+                if self.evaluate(value):
+                    return True
+            return False
+        raise ExpressionError(f"Unknown boolean operator: {type(node.op).__name__}")
+
+    def _eval_BinOp(self, node: ast.BinOp) -> Any:
+        left = self.evaluate(node.left)
+        right = self.evaluate(node.right)
+
+        if isinstance(node.op, ast.Add):
+            return left + right
+        if isinstance(node.op, ast.Sub):
+            return left - right
+        if isinstance(node.op, ast.Mult):
+            return left * right
+        if isinstance(node.op, ast.Div):
+            if right == 0:
+                return 0
+            return left / right
+        if isinstance(node.op, ast.Mod):
+            if right == 0:
+                return 0
+            return left % right
+
+        raise ExpressionError(f"Unknown binary operator: {type(node.op).__name__}")
+
+    def _eval_UnaryOp(self, node: ast.UnaryOp) -> Any:
+        operand = self.evaluate(node.operand)
+
+        if isinstance(node.op, ast.Not):
+            return not operand
+        if isinstance(node.op, ast.USub):
+            return -operand
+
+        raise ExpressionError(f"Unknown unary operator: {type(node.op).__name__}")
+
+    def _parse_date_string(self, date_str: str) -> date_type:
+        """Parse a date string in YYYY-MM-DD format."""
+        try:
+            return date_type.fromisoformat(date_str)
+        except ValueError:
+            raise ExpressionError(f"Invalid date format: {date_str}. Use YYYY-MM-DD")
+
+    def _eval_Compare(self, node: ast.Compare) -> bool:
+        left = self.evaluate(node.left)
+
+        for op, comparator in zip(node.ops, node.comparators):
+            right = self.evaluate(comparator)
+
+            # Handle date comparisons: date >= "2025-01-01"
+            if isinstance(left, date_type) and isinstance(right, str):
+                right = self._parse_date_string(right)
+            elif isinstance(left, str) and isinstance(right, date_type):
+                left = self._parse_date_string(left)
+
+            if isinstance(op, ast.Eq):
+                if isinstance(left, str) and isinstance(right, str):
+                    result = left.lower() == right.lower()
+                else:
+                    result = left == right
+            elif isinstance(op, ast.NotEq):
+                if isinstance(left, str) and isinstance(right, str):
+                    result = left.lower() != right.lower()
+                else:
+                    result = left != right
+            elif isinstance(op, ast.Lt):
+                result = left < right
+            elif isinstance(op, ast.LtE):
+                result = left <= right
+            elif isinstance(op, ast.Gt):
+                result = left > right
+            elif isinstance(op, ast.GtE):
+                result = left >= right
+            elif isinstance(op, ast.In):
+                # "NETFLIX" in description
+                if isinstance(right, str):
+                    result = left.upper() in right.upper() if isinstance(left, str) else left in right
+                else:
+                    result = left in right
+            elif isinstance(op, ast.NotIn):
+                if isinstance(right, str):
+                    result = left.upper() not in right.upper() if isinstance(left, str) else left not in right
+                else:
+                    result = left not in right
+            else:
+                raise ExpressionError(f"Unknown comparison operator: {type(op).__name__}")
+
+            if not result:
+                return False
+            left = right
+
+        return True
+
+    def _eval_Call(self, node: ast.Call) -> Any:
+        # Get function name
+        if isinstance(node.func, ast.Name):
+            func_name = node.func.id.lower()
+        else:
+            raise ExpressionError("Only simple function calls are supported")
+
+        if func_name not in self.ctx.functions:
+            raise ExpressionError(f"Unknown function: {func_name}")
+
+        # Evaluate arguments
+        args = [self.evaluate(arg) for arg in node.args]
+
+        # Call the function
+        func = self.ctx.functions[func_name]
+        return func(*args)
+
+    def _eval_IfExp(self, node: ast.IfExp) -> Any:
+        """Evaluate ternary: x if condition else y"""
+        if self.evaluate(node.test):
+            return self.evaluate(node.body)
+        else:
+            return self.evaluate(node.orelse)
+
+
 # =============================================================================
 # Public API
 # =============================================================================
@@ -532,4 +792,77 @@ def create_context(
         num_months=num_months,
         variables=variables,
         period_data=period_data,
+    )
+
+
+# =============================================================================
+# Transaction Matching API
+# =============================================================================
+
+def evaluate_transaction(
+    expr: str,
+    transaction: Dict,
+    variables: Optional[Dict[str, Any]] = None,
+) -> Any:
+    """
+    Evaluate an expression against a single transaction.
+
+    Args:
+        expr: Expression string (e.g., 'contains("NETFLIX") and amount > 10')
+        transaction: Transaction dict with 'description', 'amount', 'date' keys
+        variables: Optional user-defined variables
+
+    Returns:
+        Result of the expression evaluation (typically bool for match expressions)
+    """
+    tree = parse_expression(expr)
+    ctx = TransactionContext.from_transaction(transaction, variables)
+    evaluator = TransactionEvaluator(ctx)
+    return evaluator.evaluate(tree)
+
+
+def evaluate_transaction_ast(
+    tree: ast.Expression,
+    transaction: Dict,
+    variables: Optional[Dict[str, Any]] = None,
+) -> Any:
+    """Evaluate a pre-parsed AST against a transaction."""
+    ctx = TransactionContext.from_transaction(transaction, variables)
+    evaluator = TransactionEvaluator(ctx)
+    return evaluator.evaluate(tree)
+
+
+def matches_transaction(
+    expr: str,
+    transaction: Dict,
+    variables: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """
+    Check if a transaction matches an expression.
+
+    This is a convenience wrapper that ensures bool return.
+
+    Args:
+        expr: Match expression (e.g., 'contains("NETFLIX")')
+        transaction: Transaction dict
+        variables: Optional variables
+
+    Returns:
+        True if the transaction matches, False otherwise
+    """
+    return bool(evaluate_transaction(expr, transaction, variables))
+
+
+def create_transaction_context(
+    description: str = "",
+    amount: float = 0.0,
+    date: Optional[date_type] = None,
+    variables: Optional[Dict[str, Any]] = None,
+) -> TransactionContext:
+    """Create a transaction context for expression evaluation."""
+    return TransactionContext(
+        description=description,
+        amount=amount,
+        date=date,
+        variables=variables,
     )

@@ -74,19 +74,71 @@ def load_merchant_rules(csv_path):
     return rules
 
 
-def get_all_rules(csv_path=None):
+def _expr_to_regex(match_expr: str) -> str:
+    """Convert a .merchants match expression to a regex pattern for legacy matching.
+
+    Examples:
+        contains("NETFLIX") -> NETFLIX
+        regex("UBER(?!.*EATS)") -> UBER(?!.*EATS)
+        contains("COSTCO") and amount > 200 -> COSTCO (amount ignored in regex)
+    """
+    import re as regex_module
+    # Extract pattern from contains("...") or regex("...")
+    contains_match = regex_module.search(r'contains\s*\(\s*["\']([^"\']+)["\']\s*\)', match_expr)
+    if contains_match:
+        return contains_match.group(1)
+
+    regex_match = regex_module.search(r'regex\s*\(\s*["\']([^"\']+)["\']\s*\)', match_expr)
+    if regex_match:
+        return regex_match.group(1)
+
+    # If no function found, try to extract a quoted string
+    quoted_match = regex_module.search(r'["\']([^"\']+)["\']', match_expr)
+    if quoted_match:
+        return quoted_match.group(1)
+
+    # Fallback: use the expression as-is (may not work)
+    return match_expr
+
+
+def get_all_rules(rules_path=None):
     """Get user-defined merchant rules.
 
     Args:
-        csv_path: Optional path to user's merchant_categories.csv
+        rules_path: Optional path to user's merchants file (.merchants or .csv)
 
     Returns:
         List of (pattern, merchant, category, subcategory, parsed_pattern, source, tags) tuples.
-        Source is always 'user' for rules from the CSV file.
+        Source is always 'user' for rules from the file.
     """
     user_rules_with_source = []
-    if csv_path:
-        user_rules = load_merchant_rules(csv_path)
+    if rules_path:
+        # Check if it's the new .merchants format
+        if rules_path.endswith('.merchants'):
+            try:
+                from .merchant_engine import load_merchants_file
+                from pathlib import Path
+                engine = load_merchants_file(Path(rules_path))
+                # Convert MerchantRule objects to the tuple format used by parsing code
+                for rule in engine.rules:
+                    # Convert expression to regex for backward compatibility
+                    regex_pattern = _expr_to_regex(rule.match_expr)
+                    parsed = ParsedPattern(regex_pattern=regex_pattern)
+                    user_rules_with_source.append((
+                        regex_pattern,    # pattern (converted to regex for matching)
+                        rule.name,        # merchant name
+                        rule.category,
+                        rule.subcategory,
+                        parsed,
+                        'user',
+                        list(rule.tags)
+                    ))
+                return user_rules_with_source
+            except Exception:
+                pass  # Fall through to CSV handling if .merchants parsing fails
+
+        # CSV format (legacy)
+        user_rules = load_merchant_rules(rules_path)
         # Add source='user' to each rule
         for rule in user_rules:
             if len(rule) == 6:

@@ -57,16 +57,33 @@ data_sources:
     file: data/transactions.csv
     format: "{date:%m/%d/%Y},{description},{amount}"
 
+merchants_file: config/merchants.merchants
 sections_file: config/sections.sections
 "@ | Out-File -FilePath "config/settings.yaml" -Encoding utf8
 
     @"
-Pattern,Merchant,Category,Subcategory
-NETFLIX,Netflix,Subscriptions,Streaming
-SPOTIFY,Spotify,Subscriptions,Streaming
-AMAZON,Amazon,Shopping,Online
-STARBUCKS,Starbucks,Food,Coffee
-"@ | Out-File -FilePath "config/merchant_categories.csv" -Encoding utf8
+# Tally Merchant Rules
+
+[Netflix]
+match: contains("NETFLIX")
+category: Subscriptions
+subcategory: Streaming
+
+[Spotify]
+match: contains("SPOTIFY")
+category: Subscriptions
+subcategory: Streaming
+
+[Amazon]
+match: contains("AMAZON")
+category: Shopping
+subcategory: Online
+
+[Starbucks]
+match: contains("STARBUCKS")
+category: Food
+subcategory: Coffee
+"@ | Out-File -FilePath "config/merchants.merchants" -Encoding utf8
 
     @"
 # Test sections file

@@ -270,6 +270,34 @@ def load_config(config_dir, settings_file='settings.yaml'):
         config['_rules_file'] = rules_file
         # Don't warn - this is expected on first run
 
+    # Load merchants file (optional - merchants_file in settings.yaml)
+    # This is the new .merchants format; merchant_categories.csv is deprecated
+    merchants_file = config.get('merchants_file')
+    if merchants_file:
+        budget_dir = os.path.dirname(config_dir)
+        merchants_path = os.path.join(budget_dir, merchants_file)
+        if os.path.exists(merchants_path):
+            config['_merchants_file'] = merchants_path
+            config['_merchants_format'] = 'new'  # .merchants format
+        else:
+            warnings.append({
+                'type': 'warning',
+                'source': 'settings.yaml',
+                'message': f"Merchants file not found: {merchants_file}",
+                'suggestion': f"Create {merchants_file} or remove merchants_file from settings.yaml",
+            })
+            config['_merchants_file'] = None
+            config['_merchants_format'] = None
+    else:
+        # No merchants_file configured - check for legacy CSV
+        csv_file = os.path.join(config_dir, 'merchant_categories.csv')
+        if os.path.exists(csv_file):
+            config['_merchants_file'] = csv_file
+            config['_merchants_format'] = 'csv'  # Legacy format
+        else:
+            config['_merchants_file'] = None
+            config['_merchants_format'] = None
+
     # Load section definitions (optional - sections_file in settings.yaml)
     sections_file = config.get('sections_file')
     if sections_file:
